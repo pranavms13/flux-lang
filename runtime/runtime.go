@@ -3,7 +3,7 @@ package runtime
 import (
 	"fmt"
 
-	"github.com/pranavms13/flux-lang/parser"
+	"github.com/pranavms13/flux-lang/ast"
 )
 
 type Value interface{}
@@ -20,13 +20,13 @@ func init() {
 	})
 }
 
-func Run(prog *parser.Program) {
+func Run(prog *ast.Program) {
 	for _, stmt := range prog.Statements {
 		runStatement(stmt)
 	}
 }
 
-func runStatement(stmt *parser.Statement) {
+func runStatement(stmt *ast.Statement) {
 	if stmt.Let != nil {
 		val := evalExpr(stmt.Let.Expr, nil)
 		env[stmt.Let.Name] = val
@@ -40,7 +40,7 @@ func runStatement(stmt *parser.Statement) {
 	}
 }
 
-func evalExpr(expr *parser.Expr, local map[string]Value) Value {
+func evalExpr(expr *ast.Expr, local map[string]Value) Value {
 	switch {
 	case expr.If != nil:
 		cond := evalExpr(expr.If.Cond, local)
@@ -48,6 +48,12 @@ func evalExpr(expr *parser.Expr, local map[string]Value) Value {
 			return evalExpr(expr.If.ThenExpr, local)
 		}
 		return evalExpr(expr.If.ElseExpr, local)
+	case expr.List != nil:
+		values := []Value{}
+		for _, e := range expr.List.Elems {
+			values = append(values, evalExpr(e, local))
+		}
+		return values
 	case expr.Func != nil:
 		return expr.Func
 	case expr.Call != nil:
@@ -65,7 +71,7 @@ func evalExpr(expr *parser.Expr, local map[string]Value) Value {
 			return builtin(args...)
 		}
 
-		funcExpr, ok := fnVal.(*parser.FuncExpr)
+		funcExpr, ok := fnVal.(*ast.FuncExpr)
 		if !ok {
 			panic("not a function: " + expr.Call.Name)
 		}
@@ -122,7 +128,7 @@ func evalExpr(expr *parser.Expr, local map[string]Value) Value {
 	}
 }
 
-func evalTerm(term *parser.Term, local map[string]Value) Value {
+func evalTerm(term *ast.Term, local map[string]Value) Value {
 	if term.Bool != nil {
 		return *term.Bool
 	} else if term.Number != nil {

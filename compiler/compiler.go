@@ -1,21 +1,21 @@
 package compiler
 
 import (
-	"github.com/pranavms13/flux-lang/parser"
+	"github.com/pranavms13/flux-lang/ast"
 	"github.com/pranavms13/flux-lang/vm"
 )
 
-type Compiler struct {
+type FluxCompiler struct {
 	chunk *vm.Chunk
 }
 
-func New() *Compiler {
-	return &Compiler{
+func NewFluxCompiler() *FluxCompiler {
+	return &FluxCompiler{
 		chunk: &vm.Chunk{},
 	}
 }
 
-func (c *Compiler) Compile(prog *parser.Program) *vm.Chunk {
+func (c *FluxCompiler) Compile(prog *ast.Program) *vm.Chunk {
 	for _, stmt := range prog.Statements {
 		c.compileStmt(stmt)
 	}
@@ -23,7 +23,7 @@ func (c *Compiler) Compile(prog *parser.Program) *vm.Chunk {
 	return c.chunk
 }
 
-func (c *Compiler) compileStmt(stmt *parser.Statement) {
+func (c *FluxCompiler) compileStmt(stmt *ast.Statement) {
 	if stmt.Expr != nil {
 		c.compileExpr(stmt.Expr)
 		// Only print if it's not a print call
@@ -38,7 +38,7 @@ func (c *Compiler) compileStmt(stmt *parser.Statement) {
 	}
 }
 
-func (c *Compiler) compileExpr(expr *parser.Expr) {
+func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 	if expr == nil {
 		return
 	}
@@ -114,7 +114,7 @@ func (c *Compiler) compileExpr(expr *parser.Expr) {
 		c.emit(vm.OpCall, byte(len(expr.Call.Args)))
 	case expr.Bin != nil:
 		if expr.Bin.Left != nil {
-			c.compileExpr(&parser.Expr{Term: expr.Bin.Left})
+			c.compileExpr(&ast.Expr{Term: expr.Bin.Left})
 		}
 		if expr.Bin.Right != nil {
 			c.compileExpr(expr.Bin.Right)
@@ -136,12 +136,12 @@ func (c *Compiler) compileExpr(expr *parser.Expr) {
 	}
 }
 
-func (c *Compiler) emit(op vm.Opcode, operands ...byte) {
+func (c *FluxCompiler) emit(op vm.Opcode, operands ...byte) {
 	c.chunk.Code = append(c.chunk.Code, byte(op))
 	c.chunk.Code = append(c.chunk.Code, operands...)
 }
 
-func (c *Compiler) addConstant(val interface{}) int {
+func (c *FluxCompiler) addConstant(val interface{}) int {
 	c.chunk.Constants = append(c.chunk.Constants, val)
 	return len(c.chunk.Constants) - 1
 }

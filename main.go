@@ -11,7 +11,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: flux <file>")
+		fmt.Println("Usage: flux <file>.flux")
 		return
 	}
 
@@ -27,7 +27,7 @@ func main() {
 	}
 
 	// Step 2: Compile to bytecode
-	chunk := compiler.New().Compile(prog)
+	chunk := compiler.NewFluxCompiler().Compile(prog)
 
 	// Step 3: Execute
 	vm.New(chunk).Run()

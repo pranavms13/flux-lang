@@ -1,0 +1,34 @@
+{
+  "name": "flux-lang",
+  "displayName": "Flux Lang",
+  "description": "Flux Language Support",
+  "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pranavms13/flux-lang.git"
+  },
+  "author": {
+    "name": "Pranav M S",
+    "email": "flux@pranavms.dev"
+  },
+  "publisher": "pranavms13",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "flux",
+      "aliases": ["Flux Language", "flux"],
+      "extensions": [".flux"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "flux",
+      "scopeName": "source.flux",
+      "path": "./syntaxes/flux.tmLanguage.json"
+    }]
+  }
+}

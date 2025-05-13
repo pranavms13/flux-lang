@@ -4,7 +4,7 @@ Flux is a simple, interpreted programming language implemented in Go. It feature
 
 ## Author
 
-**Pranav MS**
+**Pranav M S**
 - GitHub: [@pranavms13](https://github.com/pranavms13)
 - Email: [flux@pranavms.dev](mailto:flux@pranavms.dev)
 
@@ -65,6 +65,36 @@ let msg = if x > 0 then {
 print(msg)
 ```
 
+## VS Code Extension
+To use the Flux Language extension in VS Code:
+
+1. Install the dependencies:
+   ```bash
+    npm install -g yo generator-code
+   ```
+
+2. Build from source:
+   ```bash
+   cd vsce
+   vsce package
+   ```
+   This will create a `.vsix` file in the `vsce` directory.
+
+3. Install VSIX File to IDE:
+   - Open VS Code / Compatible IDE
+   - Open Settings Menu (Ctrl+Shift+P)
+   - Click on the "Extensions: Install from VSIX..." option.
+   - Navigate to and select the `.vsix` file created in the previous step
+   - Reload VS Code if prompted
+
+The extension provides:
+- Syntax highlighting for `.flux` files
+- Basic language support
+- Code snippets
+- Bracket matching
+- Comment toggling
+
+
 ## Project Structure
 
 - `lexer/` - Tokenizes source code into tokens
@@ -73,6 +103,7 @@ print(msg)
 - `vm/` - Virtual machine that executes bytecode
 - `types/` - Core type definitions
 - `runtime/` - Runtime functionality and built-in functions
+- `vsce/` - VS Code Extension for Flux Language
 
 ## Dependencies
 

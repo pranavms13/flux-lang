@@ -60,7 +60,7 @@ func main() {
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: flux <command> <file>.flux")
+		printUsage()
 		return
 	}
 
@@ -167,6 +167,13 @@ func main() {
 		// Step 2: Run
 		runtime.Run(prog)
 	default:
-		fmt.Println("Usage: flux <command> <file>.flux")
+		printUsage()
 	}
+}
+
+func printUsage() {
+	fmt.Println("Usage: flux <command> <file>.flux")
+	fmt.Println("Commands:")
+	fmt.Println("\tcompile <file>.flux - Compile the given Flux source file to an executable")
+	fmt.Println("\trun <file>.flux - Run the given Flux source file")
 }

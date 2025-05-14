@@ -10,7 +10,7 @@ var LexerRules = lexer.MustSimple([]lexer.SimpleRule{
 	{Name: "Int", Pattern: `[0-9]+`},
 	{Name: "String", Pattern: `"[^"\\]*(?:\\.[^"\\]*)*"`},
 	{Name: "Arrow", Pattern: `=>`},
-	{Name: "Operators", Pattern: `==|[=+\-<>(){},]`},
+	{Name: "Operators", Pattern: `==|[=+\-<>(){}\[\],]`},
 	{Name: "Keywords", Pattern: `\b(if|then|else)\b`},
 	{Name: "Whitespace", Pattern: `[ \t\n\r]+`},
 })

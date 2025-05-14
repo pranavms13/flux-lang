@@ -26,8 +26,20 @@ func (c *FluxCompiler) Compile(prog *ast.Program) *vm.Chunk {
 func (c *FluxCompiler) compileStmt(stmt *ast.Statement) {
 	if stmt.Expr != nil {
 		c.compileExpr(stmt.Expr)
-		// Only print if it's not a print call
-		if stmt.Expr.Call == nil || stmt.Expr.Call.Name != "print" {
+		// Only print if it's not a print call and not an array indexing
+		isPrint := false
+		isIndexing := false
+		if stmt.Expr.Primary != nil {
+			if stmt.Expr.Primary.Base != nil && stmt.Expr.Primary.Base.Term != nil && stmt.Expr.Primary.Base.Term.Ident != nil && *stmt.Expr.Primary.Base.Term.Ident == "print" {
+				if len(stmt.Expr.Primary.Postfix) > 0 && stmt.Expr.Primary.Postfix[0].Call != nil {
+					isPrint = true
+				}
+			}
+			if len(stmt.Expr.Primary.Postfix) > 0 && stmt.Expr.Primary.Postfix[0].Index != nil {
+				isIndexing = true
+			}
+		}
+		if !isPrint && !isIndexing {
 			c.emit(vm.OpPrint)
 		}
 	} else if stmt.Let != nil {
@@ -43,78 +55,80 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 		return
 	}
 	switch {
-	case expr.Term != nil:
-		t := expr.Term
-		if t.Number != nil {
-			idx := c.addConstant(*t.Number)
-			c.emit(vm.OpConstant, byte(idx))
+	case expr.Primary != nil:
+		// Compile the base value
+		if expr.Primary.Base != nil {
+			if expr.Primary.Base.Term != nil {
+				t := expr.Primary.Base.Term
+				if t.Number != nil {
+					idx := c.addConstant(*t.Number)
+					c.emit(vm.OpConstant, byte(idx))
+				}
+				if t.String != nil {
+					idx := c.addConstant(*t.String)
+					c.emit(vm.OpConstant, byte(idx))
+				}
+				if t.Bool != nil {
+					idx := c.addConstant(*t.Bool)
+					c.emit(vm.OpConstant, byte(idx))
+				}
+				if t.Ident != nil {
+					idx := c.addConstant(*t.Ident)
+					c.emit(vm.OpGetGlobal, byte(idx))
+				}
+			} else if expr.Primary.Base.List != nil {
+				// First compile all elements
+				for _, e := range expr.Primary.Base.List.Elems {
+					c.compileExpr(e)
+				}
+				// Then create the array from the elements
+				c.emit(vm.OpArray, byte(len(expr.Primary.Base.List.Elems)))
+			}
 		}
-		if t.String != nil {
-			idx := c.addConstant(*t.String)
-			c.emit(vm.OpConstant, byte(idx))
-		}
-		if t.Bool != nil {
-			idx := c.addConstant(*t.Bool)
-			c.emit(vm.OpConstant, byte(idx))
-		}
-		if t.Ident != nil {
-			idx := c.addConstant(*t.Ident)
-			c.emit(vm.OpGetGlobal, byte(idx))
+		// Compile chained postfix expressions
+		for _, pf := range expr.Primary.Postfix {
+			if pf.Call != nil {
+				// First compile all arguments
+				for _, arg := range pf.Call.Args {
+					c.compileExpr(arg)
+				}
+				// Then emit the call instruction
+				c.emit(vm.OpCall, byte(len(pf.Call.Args)))
+			} else if pf.Index != nil {
+				c.compileExpr(pf.Index.Index)
+				c.emit(vm.OpIndex)
+			}
 		}
 	case expr.Block != nil:
-		// Compile each expression in the block
 		for _, e := range expr.Block.Exprs {
 			c.compileExpr(e)
 		}
 	case expr.If != nil:
-		// Compile condition
 		c.compileExpr(expr.If.Cond)
-		// Emit jump if false
 		jumpIfFalsePos := len(c.chunk.Code)
-		c.emit(vm.OpJumpIfFalse, 0) // placeholder
-		// Compile then block
+		c.emit(vm.OpJumpIfFalse, 0)
 		c.compileExpr(expr.If.ThenExpr)
-		// Emit jump to end
 		jumpToEndPos := len(c.chunk.Code)
-		c.emit(vm.OpJump, 0) // placeholder
-		// Update jump if false offset
+		c.emit(vm.OpJump, 0)
 		elsePos := len(c.chunk.Code)
 		c.chunk.Code[jumpIfFalsePos+1] = byte(elsePos)
-		// Compile else block
 		c.compileExpr(expr.If.ElseExpr)
-		// Update jump to end offset
 		endPos := len(c.chunk.Code)
 		c.chunk.Code[jumpToEndPos+1] = byte(endPos)
 	case expr.Func != nil:
-		// Create a new chunk for the function body
 		fnChunk := &vm.Chunk{
 			Params: expr.Func.Params,
 		}
-		// Save current chunk
 		oldChunk := c.chunk
-		// Set current chunk to function chunk
 		c.chunk = fnChunk
-		// Compile function body
 		c.compileExpr(expr.Func.Body)
 		c.emit(vm.OpReturn)
-		// Restore original chunk
 		c.chunk = oldChunk
-		// Add function chunk to constants
 		idx := c.addConstant(fnChunk)
 		c.emit(vm.OpClosure, byte(idx))
-	case expr.Call != nil:
-		// Push function name
-		idx := c.addConstant(expr.Call.Name)
-		c.emit(vm.OpConstant, byte(idx))
-		// Push arguments
-		for _, arg := range expr.Call.Args {
-			c.compileExpr(arg)
-		}
-		// Call function with number of arguments
-		c.emit(vm.OpCall, byte(len(expr.Call.Args)))
 	case expr.Bin != nil:
 		if expr.Bin.Left != nil {
-			c.compileExpr(&ast.Expr{Term: expr.Bin.Left})
+			c.compileExpr(&ast.Expr{Primary: expr.Bin.Left})
 		}
 		if expr.Bin.Right != nil {
 			c.compileExpr(expr.Bin.Right)

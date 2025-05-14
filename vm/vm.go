@@ -23,6 +23,8 @@ const (
 	OpJumpIfFalse
 	OpJump
 	OpJumpIfTrue
+	OpIndex
+	OpArray
 )
 
 type Chunk struct {
@@ -61,6 +63,24 @@ func (vm *VM) Run() {
 		case OpConstant:
 			index := vm.readByte()
 			vm.push(vm.chunk.Constants[index])
+		case OpIndex:
+			index := vm.pop().(int)
+			val := vm.pop()
+			arr, ok := val.([]interface{})
+			if !ok {
+				panic(fmt.Sprintf("Cannot index into non-array value: %v", val))
+			}
+			if index < 0 || index >= len(arr) {
+				panic("Array index out of bounds")
+			}
+			vm.push(arr[index])
+		case OpArray:
+			size := vm.readByte()
+			elems := make([]interface{}, size)
+			for i := int(size) - 1; i >= 0; i-- {
+				elems[i] = vm.pop()
+			}
+			vm.push(elems)
 		case OpAdd:
 			b := vm.pop()
 			a := vm.pop()
@@ -99,7 +119,8 @@ func (vm *VM) Run() {
 		case OpPop:
 			vm.pop()
 		case OpPrint:
-			fmt.Println(vm.pop())
+			val := vm.pop()
+			fmt.Println(val)
 		case OpDefineGlobal:
 			nameIdx := vm.readByte()
 			name := vm.chunk.Constants[nameIdx].(string)
@@ -110,9 +131,13 @@ func (vm *VM) Run() {
 			name := vm.chunk.Constants[nameIdx].(string)
 			if val, ok := vm.locals[name]; ok {
 				vm.push(val)
-			} else {
-				val := vm.globals[name]
+			} else if val, ok := vm.globals[name]; ok {
 				vm.push(val)
+			} else if name == "print" {
+				// Special handling for print function
+				vm.push("print")
+			} else {
+				panic(fmt.Sprintf("Undefined variable: %s", name))
 			}
 		case OpJumpIfFalse:
 			offset := vm.readByte()
@@ -134,6 +159,9 @@ func (vm *VM) Run() {
 				args[i] = vm.pop()
 			}
 			callee := vm.pop()
+			if callee == nil {
+				panic("Cannot call nil")
+			}
 			switch fn := callee.(type) {
 			case *Closure:
 				subVM := New(fn.Chunk)
@@ -149,10 +177,12 @@ func (vm *VM) Run() {
 				}
 			case string:
 				if fn == "print" {
-					for _, arg := range args {
-						fmt.Println(arg)
+					// For print, just push the last argument without printing
+					if len(args) > 0 {
+						vm.push(args[len(args)-1])
+					} else {
+						vm.push(nil)
 					}
-					vm.push(nil)
 				} else {
 					// Look up function in globals
 					if val, ok := vm.globals[fn]; ok {
@@ -169,7 +199,7 @@ func (vm *VM) Run() {
 								vm.push(nil)
 							}
 						} else {
-							panic(fmt.Sprintf("Cannot call non-function: %v", fn))
+							panic(fmt.Sprintf("Cannot call non-function: %v", val))
 						}
 					} else {
 						panic(fmt.Sprintf("Undefined function: %s", fn))

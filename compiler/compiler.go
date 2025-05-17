@@ -120,7 +120,7 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 				c.compileExpr(pf.Index.Index)
 				// Check if we're accessing a dictionary by looking at the base expression
 				if expr.Primary.Base != nil && expr.Primary.Base.Dict != nil {
-					c.emit(vm.OpDictGet)
+					c.emit(vm.OpIndex)
 				} else if expr.Primary.Base != nil && expr.Primary.Base.List != nil {
 					c.emit(vm.OpIndex)
 				} else if expr.Primary.Base != nil && expr.Primary.Base.Term != nil && expr.Primary.Base.Term.Ident != nil {
@@ -128,7 +128,7 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 					varName := *expr.Primary.Base.Term.Ident
 					if varType, ok := c.globalTypes[varName]; ok {
 						if varType == "dict" {
-							c.emit(vm.OpDictGet)
+							c.emit(vm.OpIndex)
 						} else if varType == "list" {
 							c.emit(vm.OpIndex)
 						} else {

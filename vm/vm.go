@@ -26,7 +26,6 @@ const (
 	OpIndex
 	OpArray
 	OpDict
-	OpDictGet
 )
 
 type Chunk struct {
@@ -87,18 +86,6 @@ func (vm *VM) Run() {
 			default:
 				panic(fmt.Sprintf("Cannot index into value of type %T", value))
 			}
-		case OpDictGet:
-			key := vm.pop()
-			dict := vm.pop()
-			d, ok := dict.(map[interface{}]interface{})
-			if !ok {
-				panic(fmt.Sprintf("Cannot get key from non-dict value: %v", dict))
-			}
-			val, exists := d[key]
-			if !exists {
-				panic(fmt.Sprintf("Key not found in dictionary: %v", key))
-			}
-			vm.push(val)
 		case OpDict:
 			size := vm.readByte()
 			dict := make(map[interface{}]interface{})

@@ -6,9 +6,3 @@ type FuncExpr struct {
 	Arrow  string   `parser:"@Arrow"`
 	Body   *Expr    `parser:"@@"`
 }
-
-type BlockExpr struct {
-	LBrace string  `parser:"'{'"`
-	Exprs  []*Expr `parser:"@@*"`
-	RBrace string  `parser:"'}'"`
-}

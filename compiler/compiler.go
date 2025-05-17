@@ -7,11 +7,14 @@ import (
 
 type FluxCompiler struct {
 	chunk *vm.Chunk
+	// Add type tracking
+	globalTypes map[string]string // Maps variable names to their types
 }
 
 func NewFluxCompiler() *FluxCompiler {
 	return &FluxCompiler{
-		chunk: &vm.Chunk{},
+		chunk:       &vm.Chunk{},
+		globalTypes: make(map[string]string),
 	}
 }
 
@@ -47,6 +50,17 @@ func (c *FluxCompiler) compileStmt(stmt *ast.Statement) {
 		// Store the value in globals
 		idx := c.addConstant(stmt.Let.Name)
 		c.emit(vm.OpDefineGlobal, byte(idx))
+
+		// Track the type of the variable
+		if stmt.Let.Expr.Primary != nil {
+			if stmt.Let.Expr.Primary.Base != nil {
+				if stmt.Let.Expr.Primary.Base.List != nil {
+					c.globalTypes[stmt.Let.Name] = "list"
+				} else if stmt.Let.Expr.Primary.Base.Dict != nil {
+					c.globalTypes[stmt.Let.Name] = "dict"
+				}
+			}
+		}
 	}
 }
 
@@ -83,6 +97,14 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 				}
 				// Then create the array from the elements
 				c.emit(vm.OpArray, byte(len(expr.Primary.Base.List.Elems)))
+			} else if expr.Primary.Base.Dict != nil {
+				// First compile all key-value pairs
+				for _, pair := range expr.Primary.Base.Dict.Pairs {
+					c.compileExpr(pair.Value)
+					c.compileExpr(pair.Key)
+				}
+				// Then create the dictionary from the pairs
+				c.emit(vm.OpDict, byte(len(expr.Primary.Base.Dict.Pairs)))
 			}
 		}
 		// Compile chained postfix expressions
@@ -96,7 +118,30 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 				c.emit(vm.OpCall, byte(len(pf.Call.Args)))
 			} else if pf.Index != nil {
 				c.compileExpr(pf.Index.Index)
-				c.emit(vm.OpIndex)
+				// Check if we're accessing a dictionary by looking at the base expression
+				if expr.Primary.Base != nil && expr.Primary.Base.Dict != nil {
+					c.emit(vm.OpIndex)
+				} else if expr.Primary.Base != nil && expr.Primary.Base.List != nil {
+					c.emit(vm.OpIndex)
+				} else if expr.Primary.Base != nil && expr.Primary.Base.Term != nil && expr.Primary.Base.Term.Ident != nil {
+					// For variable access, check the tracked type
+					varName := *expr.Primary.Base.Term.Ident
+					if varType, ok := c.globalTypes[varName]; ok {
+						if varType == "dict" {
+							c.emit(vm.OpIndex)
+						} else if varType == "list" {
+							c.emit(vm.OpIndex)
+						} else {
+							// If type is unknown, use OpIndex which will do runtime type checking
+							c.emit(vm.OpIndex)
+						}
+					} else {
+						// If type is unknown, use OpIndex which will do runtime type checking
+						c.emit(vm.OpIndex)
+					}
+				} else {
+					c.emit(vm.OpIndex)
+				}
 			}
 		}
 	case expr.Block != nil:

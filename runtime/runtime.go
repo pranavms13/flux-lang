@@ -40,7 +40,7 @@ func runStatement(stmt *ast.Statement) {
 			}
 		}
 
-		// Check if this is an array indexing
+		// Check if this is an array indexing or dictionary access
 		isIndexing := false
 		if stmt.Expr.Primary != nil && len(stmt.Expr.Primary.Postfix) > 0 && stmt.Expr.Primary.Postfix[0].Index != nil {
 			isIndexing = true
@@ -107,6 +107,14 @@ func evalExpr(expr *ast.Expr, local map[string]Value) Value {
 					vals = append(vals, evalExpr(e, local))
 				}
 				val = vals
+			} else if expr.Primary.Base.Dict != nil {
+				dict := make(map[interface{}]interface{})
+				for _, pair := range expr.Primary.Base.Dict.Pairs {
+					key := evalExpr(pair.Key, local)
+					value := evalExpr(pair.Value, local)
+					dict[key] = value
+				}
+				val = dict
 			}
 		}
 		// Apply postfixes
@@ -140,19 +148,28 @@ func evalExpr(expr *ast.Expr, local map[string]Value) Value {
 					panic("not a function")
 				}
 			} else if pf.Index != nil {
-				arr, ok := val.([]Value)
-				if !ok {
-					panic("Cannot index non-array value")
+				indexVal := evalExpr(pf.Index.Index, local)
+				switch v := val.(type) {
+				case []Value:
+					// Array indexing
+					idx, ok := indexVal.(int)
+					if !ok {
+						panic("Array index must be an integer")
+					}
+					if idx < 0 || idx >= len(v) {
+						panic("Array index out of bounds")
+					}
+					val = v[idx]
+				case map[interface{}]interface{}:
+					// Dictionary access
+					value, exists := v[indexVal]
+					if !exists {
+						panic(fmt.Sprintf("Key not found in dictionary: %v", indexVal))
+					}
+					val = value
+				default:
+					panic(fmt.Sprintf("Cannot index into value of type %T", val))
 				}
-				idxVal := evalExpr(pf.Index.Index, local)
-				intIdx, ok := idxVal.(int)
-				if !ok {
-					panic("Array index must be an integer")
-				}
-				if intIdx < 0 || intIdx >= len(arr) {
-					panic("Array index out of bounds")
-				}
-				val = arr[intIdx]
 			}
 		}
 		return val
@@ -187,6 +204,8 @@ func evalTerm(term *ast.Term, local map[string]Value) Value {
 
 func truthy(val Value) bool {
 	switch v := val.(type) {
+	case bool:
+		return v
 	case int:
 		return v != 0
 	case string:
@@ -194,4 +213,15 @@ func truthy(val Value) bool {
 	default:
 		return val != nil
 	}
+}
+
+func evalBlock(block *ast.BlockExpr, local map[string]Value) Value {
+	if block == nil {
+		return nil
+	}
+	var result Value
+	for _, expr := range block.Exprs {
+		result = evalExpr(expr, local)
+	}
+	return result
 }

@@ -25,6 +25,8 @@ const (
 	OpJumpIfTrue
 	OpIndex
 	OpArray
+	OpDict
+	OpDictGet
 )
 
 type Chunk struct {
@@ -64,16 +66,48 @@ func (vm *VM) Run() {
 			index := vm.readByte()
 			vm.push(vm.chunk.Constants[index])
 		case OpIndex:
-			index := vm.pop().(int)
-			val := vm.pop()
-			arr, ok := val.([]interface{})
+			index := vm.pop()
+			value := vm.pop()
+			switch v := value.(type) {
+			case []interface{}:
+				idx, ok := index.(int)
+				if !ok {
+					panic("Array index must be an integer")
+				}
+				if idx < 0 || idx >= len(v) {
+					panic("Array index out of bounds")
+				}
+				vm.push(v[idx])
+			case map[interface{}]interface{}:
+				val, exists := v[index]
+				if !exists {
+					panic(fmt.Sprintf("Key not found in dictionary: %v", index))
+				}
+				vm.push(val)
+			default:
+				panic(fmt.Sprintf("Cannot index into value of type %T", value))
+			}
+		case OpDictGet:
+			key := vm.pop()
+			dict := vm.pop()
+			d, ok := dict.(map[interface{}]interface{})
 			if !ok {
-				panic(fmt.Sprintf("Cannot index into non-array value: %v", val))
+				panic(fmt.Sprintf("Cannot get key from non-dict value: %v", dict))
 			}
-			if index < 0 || index >= len(arr) {
-				panic("Array index out of bounds")
+			val, exists := d[key]
+			if !exists {
+				panic(fmt.Sprintf("Key not found in dictionary: %v", key))
 			}
-			vm.push(arr[index])
+			vm.push(val)
+		case OpDict:
+			size := vm.readByte()
+			dict := make(map[interface{}]interface{})
+			for i := 0; i < int(size); i++ {
+				key := vm.pop()
+				val := vm.pop()
+				dict[key] = val
+			}
+			vm.push(dict)
 		case OpArray:
 			size := vm.readByte()
 			elems := make([]interface{}, size)

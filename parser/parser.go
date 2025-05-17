@@ -12,6 +12,8 @@ var parserInstance = participle.MustBuild[ast.Program](
 	participle.Lexer(lexer.LexerRules),
 	participle.Unquote("String"),
 	participle.Elide("Whitespace", "SingleLineComment", "MultiLineComment"),
+	participle.UseLookahead(5),
+	participle.CaseInsensitive("Keywords"),
 )
 
 func Parse(input string) (*ast.Program, error) {

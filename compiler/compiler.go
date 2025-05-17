@@ -83,6 +83,14 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 				}
 				// Then create the array from the elements
 				c.emit(vm.OpArray, byte(len(expr.Primary.Base.List.Elems)))
+			} else if expr.Primary.Base.Dict != nil {
+				// First compile all key-value pairs
+				for _, pair := range expr.Primary.Base.Dict.Pairs {
+					c.compileExpr(pair.Value)
+					c.compileExpr(pair.Key)
+				}
+				// Then create the dictionary from the pairs
+				c.emit(vm.OpDict, byte(len(expr.Primary.Base.Dict.Pairs)))
 			}
 		}
 		// Compile chained postfix expressions
@@ -96,7 +104,18 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 				c.emit(vm.OpCall, byte(len(pf.Call.Args)))
 			} else if pf.Index != nil {
 				c.compileExpr(pf.Index.Index)
-				c.emit(vm.OpIndex)
+				// Check if we're accessing a dictionary by looking at the base expression
+				if expr.Primary.Base != nil && expr.Primary.Base.Dict != nil {
+					c.emit(vm.OpDictGet)
+				} else if expr.Primary.Base != nil && expr.Primary.Base.List != nil {
+					c.emit(vm.OpIndex)
+				} else if expr.Primary.Base != nil && expr.Primary.Base.Term != nil && expr.Primary.Base.Term.Ident != nil {
+					// For variable access, we need to check if it's a dictionary
+					// We'll use OpIndex for now since we can't determine the type at compile time
+					c.emit(vm.OpIndex)
+				} else {
+					c.emit(vm.OpIndex)
+				}
 			}
 		}
 	case expr.Block != nil:
@@ -158,4 +177,14 @@ func (c *FluxCompiler) emit(op vm.Opcode, operands ...byte) {
 func (c *FluxCompiler) addConstant(val interface{}) int {
 	c.chunk.Constants = append(c.chunk.Constants, val)
 	return len(c.chunk.Constants) - 1
+}
+
+func (c *FluxCompiler) compileBlock(block *ast.BlockExpr) error {
+	if block == nil {
+		return nil
+	}
+	for _, expr := range block.Exprs {
+		c.compileExpr(expr)
+	}
+	return nil
 }

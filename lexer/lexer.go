@@ -11,6 +11,6 @@ var LexerRules = lexer.MustSimple([]lexer.SimpleRule{
 	{Name: "String", Pattern: `"[^"]*"`},
 	{Name: "Int", Pattern: `\d+`},
 	{Name: "Ident", Pattern: `[a-zA-Z_][a-zA-Z0-9_]*`},
-	{Name: "Operators", Pattern: `[+\-*/%<>=!&|(){}\[\],:]`},
+	{Name: "Operators", Pattern: `==|[+\-*/%<>=!&|(){}\[\],:]`},
 	{Name: "Whitespace", Pattern: `[ \t\n\r]+`},
 })

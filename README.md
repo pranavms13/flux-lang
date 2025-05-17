@@ -8,14 +8,15 @@ Flux is a simple, interpreted programming language implemented in Go. It feature
 - GitHub: [@pranavms13](https://github.com/pranavms13)
 - Email: [flux@pranavms.dev](mailto:flux@pranavms.dev)
 
-## Features
+## Supported Features
 
-- Simple and intuitive syntax
-- Function definitions and calls
-- String concatenation
+- Basic Inline Function definitions and calls
+- Strings
 - Conditional expressions
 - Basic arithmetic operations
 - Print statements for output
+- Lists
+- Dictionaries
 
 ## Installation
 
@@ -33,12 +34,23 @@ go build -o dist/flux
 To run a Flux program:
 
 ```bash
-./dist/flux <filename>
+./dist/flux run <filename>
 ```
 
 For example:
 ```bash
-./dist/flux main.flux
+./dist/flux run main.flux
+```
+
+To compile a Flux program to a binary:
+
+```bash
+./dist/flux compile <filename>
+```
+
+For example:
+```bash
+./dist/flux compile main.flux
 ```
 
 ## Example Code
@@ -64,6 +76,8 @@ let msg = if x > 0 then {
 }
 print(msg)
 ```
+
+For more examples, look into [Examples](./examples)
 
 ## VS Code Extension
 To use the Flux Language extension in VS Code:

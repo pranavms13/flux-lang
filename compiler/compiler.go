@@ -204,13 +204,3 @@ func (c *FluxCompiler) addConstant(val interface{}) int {
 	c.chunk.Constants = append(c.chunk.Constants, val)
 	return len(c.chunk.Constants) - 1
 }
-
-func (c *FluxCompiler) compileBlock(block *ast.BlockExpr) error {
-	if block == nil {
-		return nil
-	}
-	for _, expr := range block.Exprs {
-		c.compileExpr(expr)
-	}
-	return nil
-}

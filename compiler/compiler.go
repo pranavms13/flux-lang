@@ -7,11 +7,14 @@ import (
 
 type FluxCompiler struct {
 	chunk *vm.Chunk
+	// Add type tracking
+	globalTypes map[string]string // Maps variable names to their types
 }
 
 func NewFluxCompiler() *FluxCompiler {
 	return &FluxCompiler{
-		chunk: &vm.Chunk{},
+		chunk:       &vm.Chunk{},
+		globalTypes: make(map[string]string),
 	}
 }
 
@@ -47,6 +50,17 @@ func (c *FluxCompiler) compileStmt(stmt *ast.Statement) {
 		// Store the value in globals
 		idx := c.addConstant(stmt.Let.Name)
 		c.emit(vm.OpDefineGlobal, byte(idx))
+
+		// Track the type of the variable
+		if stmt.Let.Expr.Primary != nil {
+			if stmt.Let.Expr.Primary.Base != nil {
+				if stmt.Let.Expr.Primary.Base.List != nil {
+					c.globalTypes[stmt.Let.Name] = "list"
+				} else if stmt.Let.Expr.Primary.Base.Dict != nil {
+					c.globalTypes[stmt.Let.Name] = "dict"
+				}
+			}
+		}
 	}
 }
 
@@ -110,9 +124,21 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 				} else if expr.Primary.Base != nil && expr.Primary.Base.List != nil {
 					c.emit(vm.OpIndex)
 				} else if expr.Primary.Base != nil && expr.Primary.Base.Term != nil && expr.Primary.Base.Term.Ident != nil {
-					// For variable access, we need to check if it's a dictionary
-					// We'll use OpIndex for now since we can't determine the type at compile time
-					c.emit(vm.OpIndex)
+					// For variable access, check the tracked type
+					varName := *expr.Primary.Base.Term.Ident
+					if varType, ok := c.globalTypes[varName]; ok {
+						if varType == "dict" {
+							c.emit(vm.OpDictGet)
+						} else if varType == "list" {
+							c.emit(vm.OpIndex)
+						} else {
+							// If type is unknown, use OpIndex which will do runtime type checking
+							c.emit(vm.OpIndex)
+						}
+					} else {
+						// If type is unknown, use OpIndex which will do runtime type checking
+						c.emit(vm.OpIndex)
+					}
 				} else {
 					c.emit(vm.OpIndex)
 				}

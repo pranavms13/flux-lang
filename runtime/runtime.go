@@ -90,11 +90,7 @@ func evalExpr(expr *ast.Expr, local map[string]Value) Value {
 			panic("unsupported operator: " + *expr.Bin.Operator)
 		}
 	case expr.Block != nil:
-		var result Value
-		for _, e := range expr.Block.Exprs {
-			result = evalExpr(e, local)
-		}
-		return result
+		return evalBlock(expr.Block, local)
 	case expr.Primary != nil:
 		// Evaluate the base
 		var val Value

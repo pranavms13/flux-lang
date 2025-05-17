@@ -31,7 +31,7 @@ go build -o dist/flux
 
 ## Usage
 
-To run a Flux program:
+#### To run a Flux program:
 
 ```bash
 ./dist/flux run <filename>
@@ -42,7 +42,7 @@ For example:
 ./dist/flux run main.flux
 ```
 
-To compile a Flux program to a binary:
+#### To compile a Flux program to a binary:
 
 ```bash
 ./dist/flux compile <filename>

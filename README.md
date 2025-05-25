@@ -2,6 +2,7 @@
 
 Flux is a simple, interpreted programming language implemented in Go. It features a clean syntax and supports basic programming constructs like functions, conditionals, and string operations.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pranavms13/flux-lang)
 ## Author
 
 **Pranav M S**

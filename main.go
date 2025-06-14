@@ -12,8 +12,10 @@ import (
 	"text/template"
 
 	"github.com/pranavms13/flux-lang/compiler"
+	"github.com/pranavms13/flux-lang/config"
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
+	"github.com/pranavms13/flux-lang/types"
 	"github.com/pranavms13/flux-lang/vm"
 )
 
@@ -59,14 +61,26 @@ func main() {
 `
 
 func main() {
-	if len(os.Args) < 3 {
+	if len(os.Args) < 2 {
 		printUsage()
 		return
+	}
+
+	// Load configuration
+	cfg, err := config.GetConfigFromCurrentDir()
+	if err != nil {
+		fmt.Printf("Warning: Could not load configuration: %v\n", err)
+		cfg = config.DefaultConfig()
 	}
 
 	command := os.Args[1]
 	switch command {
 	case "compile":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: compile command requires a file argument")
+			printUsage()
+			return
+		}
 		source, err := os.ReadFile(os.Args[2])
 		if err != nil {
 			panic(err)
@@ -78,10 +92,39 @@ func main() {
 			panic(err)
 		}
 
-		// Step 2: Compile to bytecode
+		// Step 2: Type Check (if enabled)
+		if cfg.TypeChecking.Enabled {
+			typeChecker := types.NewTypeCheckerWithConfig(types.TypeCheckingMode{
+				Strict:   cfg.TypeChecking.Strict,
+				WarnOnly: cfg.TypeChecking.WarnOnly,
+				Enabled:  cfg.TypeChecking.Enabled,
+			})
+
+			typeChecker.CheckProgram(prog)
+
+			// Display warnings if any
+			if typeChecker.HasWarnings() {
+				fmt.Println("Type checking warnings:")
+				for _, warning := range typeChecker.GetWarnings() {
+					fmt.Printf("  - %s\n", warning)
+				}
+			}
+
+			// Handle errors
+			if typeChecker.HasErrors() {
+				fmt.Println("Type checking errors:")
+				for _, error := range typeChecker.GetErrors() {
+					fmt.Printf("  - %s\n", error)
+				}
+				fmt.Println("Compilation failed due to type errors.")
+				os.Exit(1)
+			}
+		}
+
+		// Step 3: Compile to bytecode
 		chunk := compiler.NewFluxCompiler().Compile(prog)
 
-		// Step 3: Create temporary file for bytecode
+		// Step 4: Create temporary file for bytecode
 		tempFile, err := os.CreateTemp("", "flux-bytecode-*.gob")
 		if err != nil {
 			panic(err)
@@ -153,6 +196,11 @@ func main() {
 		fmt.Printf("Compiled executable created at %s\n", filepath.Join(outputDir, execName))
 
 	case "run":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: run command requires a file argument")
+			printUsage()
+			return
+		}
 		source, err := os.ReadFile(os.Args[2])
 		if err != nil {
 			panic(err)
@@ -164,8 +212,44 @@ func main() {
 			panic(err)
 		}
 
-		// Step 2: Run
+		// Step 2: Type Check (if enabled)
+		if cfg.TypeChecking.Enabled {
+			typeChecker := types.NewTypeCheckerWithConfig(types.TypeCheckingMode{
+				Strict:   cfg.TypeChecking.Strict,
+				WarnOnly: cfg.TypeChecking.WarnOnly,
+				Enabled:  cfg.TypeChecking.Enabled,
+			})
+
+			typeChecker.CheckProgram(prog)
+
+			// Display warnings if any
+			if typeChecker.HasWarnings() {
+				fmt.Println("Type checking warnings:")
+				for _, warning := range typeChecker.GetWarnings() {
+					fmt.Printf("  - %s\n", warning)
+				}
+			}
+
+			// Handle errors
+			if typeChecker.HasErrors() {
+				fmt.Println("Type checking errors:")
+				for _, error := range typeChecker.GetErrors() {
+					fmt.Printf("  - %s\n", error)
+				}
+				fmt.Println("Execution failed due to type errors.")
+				os.Exit(1)
+			}
+		}
+
+		// Step 3: Run
 		runtime.Run(prog)
+	case "init":
+		// Initialize a new Flux project with default configuration
+		if err := initializeProject(); err != nil {
+			fmt.Printf("Error initializing project: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Initialized new Flux project with flux.json configuration file")
 	default:
 		printUsage()
 	}
@@ -176,4 +260,10 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("\tcompile <file>.flux - Compile the given Flux source file to an executable")
 	fmt.Println("\trun <file>.flux - Run the given Flux source file")
+	fmt.Println("\tinit - Initialize a new Flux project with default configuration")
+}
+
+func initializeProject() error {
+	cfg := config.DefaultConfig()
+	return config.SaveConfig(cfg, ".")
 }

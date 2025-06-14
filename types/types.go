@@ -100,6 +100,13 @@ func (t UnknownType) Equals(other FluxType) bool {
 	return true
 }
 
+// TypesEqual provides symmetric type equality checking.
+// It returns true if either a.Equals(b) or b.Equals(a) is true.
+// This fixes the non-symmetric equality relation caused by UnknownType.
+func TypesEqual(a, b FluxType) bool {
+	return a.Equals(b) || b.Equals(a)
+}
+
 // Type environment for variable bindings
 type TypeEnv struct {
 	bindings map[string]FluxType
@@ -215,7 +222,7 @@ func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 			}
 
 			// Check if the expression type matches the annotation
-			if !exprType.Equals(annotatedType) {
+			if !TypesEqual(exprType, annotatedType) {
 				msg := fmt.Sprintf("type mismatch: variable %s declared as %s but assigned %s",
 					stmt.Let.Name, annotatedType.String(), exprType.String())
 
@@ -263,7 +270,7 @@ func (tc *TypeChecker) CheckExpr(expr *ast.Expr) FluxType {
 
 func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	condType := tc.CheckExpr(ifExpr.Cond)
-	if !condType.Equals(BoolType{}) && !condType.Equals(UnknownType{}) {
+	if !TypesEqual(condType, BoolType{}) && !TypesEqual(condType, UnknownType{}) {
 		msg := fmt.Sprintf("if condition must be bool, got %s", condType.String())
 		if tc.config.Strict {
 			tc.Error(msg)
@@ -275,7 +282,7 @@ func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	thenType := tc.CheckExpr(ifExpr.ThenExpr)
 	elseType := tc.CheckExpr(ifExpr.ElseExpr)
 
-	if !thenType.Equals(elseType) && !thenType.Equals(UnknownType{}) && !elseType.Equals(UnknownType{}) {
+	if !TypesEqual(thenType, elseType) && !TypesEqual(thenType, UnknownType{}) && !TypesEqual(elseType, UnknownType{}) {
 		msg := fmt.Sprintf("if branches must have same type: then=%s, else=%s",
 			thenType.String(), elseType.String())
 
@@ -285,7 +292,7 @@ func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 		} else {
 			tc.Warning(msg + " (using union type)")
 			// In non-strict mode, return the first non-void type or unknown
-			if !thenType.Equals(VoidType{}) {
+			if !TypesEqual(thenType, VoidType{}) {
 				return thenType
 			}
 			return elseType
@@ -307,21 +314,21 @@ func (tc *TypeChecker) CheckBinaryExpr(binExpr *ast.Binary) FluxType {
 	switch *binExpr.Operator {
 	case "+":
 		// Allow unknown types for inference
-		if leftType.Equals(UnknownType{}) || rightType.Equals(UnknownType{}) {
+		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
 			// Try to infer based on the known type
-			if !leftType.Equals(UnknownType{}) {
+			if !TypesEqual(leftType, UnknownType{}) {
 				return leftType
 			}
-			if !rightType.Equals(UnknownType{}) {
+			if !TypesEqual(rightType, UnknownType{}) {
 				return rightType
 			}
 			return UnknownType{} // Both unknown, return unknown
 		}
 
-		if leftType.Equals(IntType{}) && rightType.Equals(IntType{}) {
+		if TypesEqual(leftType, IntType{}) && TypesEqual(rightType, IntType{}) {
 			return IntType{}
 		}
-		if leftType.Equals(StringType{}) && rightType.Equals(StringType{}) {
+		if TypesEqual(leftType, StringType{}) && TypesEqual(rightType, StringType{}) {
 			return StringType{}
 		}
 
@@ -330,8 +337,8 @@ func (tc *TypeChecker) CheckBinaryExpr(binExpr *ast.Binary) FluxType {
 			tc.Error(msg)
 		} else {
 			// In non-strict mode, be more lenient
-			if (leftType.Equals(IntType{}) || leftType.Equals(StringType{})) &&
-				(rightType.Equals(IntType{}) || rightType.Equals(StringType{})) {
+			if (TypesEqual(leftType, IntType{}) || TypesEqual(leftType, StringType{})) &&
+				(TypesEqual(rightType, IntType{}) || TypesEqual(rightType, StringType{})) {
 				tc.Warning(fmt.Sprintf("mixed type addition: %s + %s (converting to string)",
 					leftType.String(), rightType.String()))
 				return StringType{} // Default to string for mixed additions
@@ -342,11 +349,11 @@ func (tc *TypeChecker) CheckBinaryExpr(binExpr *ast.Binary) FluxType {
 		return VoidType{}
 	case "-":
 		// Allow unknown types for inference
-		if leftType.Equals(UnknownType{}) || rightType.Equals(UnknownType{}) {
+		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
 			return IntType{} // Assume int for arithmetic
 		}
 
-		if leftType.Equals(IntType{}) && rightType.Equals(IntType{}) {
+		if TypesEqual(leftType, IntType{}) && TypesEqual(rightType, IntType{}) {
 			return IntType{}
 		}
 
@@ -360,11 +367,11 @@ func (tc *TypeChecker) CheckBinaryExpr(binExpr *ast.Binary) FluxType {
 		return VoidType{}
 	case "==":
 		// Allow comparison of unknown types
-		if leftType.Equals(UnknownType{}) || rightType.Equals(UnknownType{}) {
+		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
 			return BoolType{}
 		}
 
-		if leftType.Equals(rightType) {
+		if TypesEqual(leftType, rightType) {
 			return BoolType{}
 		}
 
@@ -377,11 +384,11 @@ func (tc *TypeChecker) CheckBinaryExpr(binExpr *ast.Binary) FluxType {
 		return BoolType{}
 	case ">", "<":
 		// Allow unknown types for comparison
-		if leftType.Equals(UnknownType{}) || rightType.Equals(UnknownType{}) {
+		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
 			return BoolType{}
 		}
 
-		if leftType.Equals(IntType{}) && rightType.Equals(IntType{}) {
+		if TypesEqual(leftType, IntType{}) && TypesEqual(rightType, IntType{}) {
 			return BoolType{}
 		}
 
@@ -467,7 +474,7 @@ func (tc *TypeChecker) CheckListExpr(list *ast.ListExpr) FluxType {
 	elemType := tc.CheckExpr(list.Elems[0])
 	for i, elem := range list.Elems[1:] {
 		t := tc.CheckExpr(elem)
-		if !t.Equals(elemType) {
+		if !TypesEqual(t, elemType) {
 			tc.Error(fmt.Sprintf("list element %d has type %s, expected %s",
 				i+1, t.String(), elemType.String()))
 		}
@@ -489,11 +496,11 @@ func (tc *TypeChecker) CheckDictExpr(dict *ast.DictExpr) FluxType {
 		kt := tc.CheckExpr(pair.Key)
 		vt := tc.CheckExpr(pair.Value)
 
-		if !kt.Equals(keyType) {
+		if !TypesEqual(kt, keyType) {
 			tc.Error(fmt.Sprintf("dictionary key %d has type %s, expected %s",
 				i+1, kt.String(), keyType.String()))
 		}
-		if !vt.Equals(valueType) {
+		if !TypesEqual(vt, valueType) {
 			tc.Error(fmt.Sprintf("dictionary value %d has type %s, expected %s",
 				i+1, vt.String(), valueType.String()))
 		}
@@ -520,8 +527,8 @@ func (tc *TypeChecker) CheckCallExpr(fnType FluxType, call *ast.CallExpr) FluxTy
 		expectedType := funcType.ParamTypes[i]
 
 		// Allow unknown types to be compatible
-		if !expectedType.Equals(UnknownType{}) && !argType.Equals(UnknownType{}) {
-			if !argType.Equals(expectedType) {
+		if !TypesEqual(expectedType, UnknownType{}) && !TypesEqual(argType, UnknownType{}) {
+			if !TypesEqual(argType, expectedType) {
 				tc.Error(fmt.Sprintf("argument %d has type %s, expected %s",
 					i, argType.String(), expectedType.String()))
 			}
@@ -536,12 +543,12 @@ func (tc *TypeChecker) CheckIndexExpr(baseType FluxType, index *ast.IndexExpr) F
 
 	switch bt := baseType.(type) {
 	case ListType:
-		if !indexType.Equals(IntType{}) {
+		if !TypesEqual(indexType, IntType{}) {
 			tc.Error(fmt.Sprintf("list index must be int, got %s", indexType.String()))
 		}
 		return bt.ElementType
 	case DictType:
-		if !indexType.Equals(bt.KeyType) {
+		if !TypesEqual(indexType, bt.KeyType) {
 			tc.Error(fmt.Sprintf("dictionary key must be %s, got %s",
 				bt.KeyType.String(), indexType.String()))
 		}
@@ -593,7 +600,7 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 			returnType = bodyType // use inferred type
 		} else {
 			// Check if body type matches return annotation
-			if !bodyType.Equals(UnknownType{}) && !bodyType.Equals(annotatedReturnType) {
+			if !TypesEqual(bodyType, UnknownType{}) && !TypesEqual(bodyType, annotatedReturnType) {
 				tc.Error(fmt.Sprintf("return type mismatch: declared %s but body returns %s",
 					annotatedReturnType.String(), bodyType.String()))
 			}
@@ -615,7 +622,7 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 
 // canAssign checks if a value of one type can be assigned to another in non-strict mode
 func (tc *TypeChecker) canAssign(from, to FluxType) bool {
-	if from.Equals(to) {
+	if TypesEqual(from, to) {
 		return true
 	}
 

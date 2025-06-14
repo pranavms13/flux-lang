@@ -68,47 +68,65 @@ func ConvertASTType(astType *ast.Type) (FluxType, error) {
 }
 
 // Convert internal FluxType to AST type (for error messages, etc.)
-func ConvertFluxTypeToAST(fluxType FluxType) *ast.Type {
+func ConvertFluxTypeToAST(fluxType FluxType) (*ast.Type, error) {
 	switch t := fluxType.(type) {
 	case IntType:
 		basic := "int"
-		return &ast.Type{Basic: &basic}
+		return &ast.Type{Basic: &basic}, nil
 	case StringType:
 		basic := "string"
-		return &ast.Type{Basic: &basic}
+		return &ast.Type{Basic: &basic}, nil
 	case BoolType:
 		basic := "bool"
-		return &ast.Type{Basic: &basic}
+		return &ast.Type{Basic: &basic}, nil
 	case VoidType:
 		basic := "void"
-		return &ast.Type{Basic: &basic}
+		return &ast.Type{Basic: &basic}, nil
 	case ListType:
+		elemType, err := ConvertFluxTypeToAST(t.ElementType)
+		if err != nil {
+			return nil, fmt.Errorf("error converting list element type: %w", err)
+		}
 		return &ast.Type{
 			List: &ast.ListType{
-				ElemType: ConvertFluxTypeToAST(t.ElementType),
+				ElemType: elemType,
 			},
-		}
+		}, nil
 	case DictType:
+		keyType, err := ConvertFluxTypeToAST(t.KeyType)
+		if err != nil {
+			return nil, fmt.Errorf("error converting dict key type: %w", err)
+		}
+		valueType, err := ConvertFluxTypeToAST(t.ValueType)
+		if err != nil {
+			return nil, fmt.Errorf("error converting dict value type: %w", err)
+		}
 		return &ast.Type{
 			Dict: &ast.DictType{
-				KeyType:   ConvertFluxTypeToAST(t.KeyType),
-				ValueType: ConvertFluxTypeToAST(t.ValueType),
+				KeyType:   keyType,
+				ValueType: valueType,
 			},
-		}
+		}, nil
 	case FunctionType:
 		paramTypes := make([]*ast.Type, len(t.ParamTypes))
 		for i, pt := range t.ParamTypes {
-			paramTypes[i] = ConvertFluxTypeToAST(pt)
+			paramType, err := ConvertFluxTypeToAST(pt)
+			if err != nil {
+				return nil, fmt.Errorf("error converting function parameter %d type: %w", i, err)
+			}
+			paramTypes[i] = paramType
+		}
+		returnType, err := ConvertFluxTypeToAST(t.ReturnType)
+		if err != nil {
+			return nil, fmt.Errorf("error converting function return type: %w", err)
 		}
 		return &ast.Type{
 			Function: &ast.FuncType{
 				ParamTypes: paramTypes,
-				ReturnType: ConvertFluxTypeToAST(t.ReturnType),
+				ReturnType: returnType,
 			},
-		}
+		}, nil
 	default:
-		// Default to void for unknown types
-		basic := "void"
-		return &ast.Type{Basic: &basic}
+		return nil, fmt.Errorf("unknown or unsupported FluxType: %T", fluxType)
 	}
 }

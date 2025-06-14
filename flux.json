@@ -1,0 +1,11 @@
+{
+  "typeChecking": {
+    "strict": false,
+    "warnOnly": false,
+    "enabled": true
+  },
+  "compiler": {
+    "optimizationLevel": 1,
+    "debug": false
+  }
+}

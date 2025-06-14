@@ -137,7 +137,7 @@ func evalExpr(expr *ast.Expr, local map[string]Value) Value {
 					}
 					localEnv := make(map[string]Value)
 					for i, param := range funcExpr.Params {
-						localEnv[param] = args[i]
+						localEnv[param.Name] = args[i]
 					}
 					val = evalExpr(funcExpr.Body, localEnv)
 				} else {

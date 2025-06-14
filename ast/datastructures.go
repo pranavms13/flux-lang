@@ -67,10 +67,46 @@ type Statement struct {
 }
 
 type LetStatement struct {
-	Let  string `parser:"'let'"`
-	Name string `parser:"@Ident"`
-	Eq   string `parser:"'='"`
-	Expr *Expr  `parser:"@@"`
+	Let      string    `parser:"'let'"`
+	Name     string    `parser:"@Ident"`
+	TypeAnno *TypeAnno `parser:"@@?"`
+	Eq       string    `parser:"'='"`
+	Expr     *Expr     `parser:"@@"`
+}
+
+type TypeAnno struct {
+	Colon string `parser:"':'"`
+	Type  *Type  `parser:"@@"`
+}
+
+type Type struct {
+	Basic    *string   `parser:"  @('int' | 'string' | 'bool' | 'void')"`
+	List     *ListType `parser:"| @@"`
+	Dict     *DictType `parser:"| @@"`
+	Function *FuncType `parser:"| @@"`
+}
+
+type ListType struct {
+	LBrack   string `parser:"'['"`
+	ElemType *Type  `parser:"@@"`
+	RBrack   string `parser:"']'"`
+}
+
+type DictType struct {
+	LBrace    string `parser:"'{'"`
+	KeyType   *Type  `parser:"@@"`
+	Colon     string `parser:"':'"`
+	ValueType *Type  `parser:"@@"`
+	RBrace    string `parser:"'}'"`
+}
+
+type FuncType struct {
+	Fn         string  `parser:"'fn'"`
+	LParen     string  `parser:"'('"`
+	ParamTypes []*Type `parser:"(@@ (',' @@)*)?"`
+	RParen     string  `parser:"')'"`
+	Arrow      string  `parser:"@TypeArrow"`
+	ReturnType *Type   `parser:"@@"`
 }
 
 type Term struct {

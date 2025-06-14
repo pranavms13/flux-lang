@@ -161,8 +161,14 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 		endPos := len(c.chunk.Code)
 		c.chunk.Code[jumpToEndPos+1] = byte(endPos)
 	case expr.Func != nil:
+		// Extract parameter names from FuncParam structures
+		paramNames := make([]string, len(expr.Func.Params))
+		for i, param := range expr.Func.Params {
+			paramNames[i] = param.Name
+		}
+
 		fnChunk := &vm.Chunk{
-			Params: expr.Func.Params,
+			Params: paramNames,
 		}
 		oldChunk := c.chunk
 		c.chunk = fnChunk

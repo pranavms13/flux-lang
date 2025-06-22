@@ -1,0 +1,273 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ created ]
+
+env:
+  GO_VERSION: '1.23.2'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Check formatting
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "The following files are not formatted:"
+          gofmt -s -l .
+          exit 1
+        fi
+
+  determine-version:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: test
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should-release: ${{ steps.version.outputs.should-release }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Determine version
+      id: version
+      run: |
+        # Get the latest tag, or default to v0.0.0 if no tags exist
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "Latest tag: $LATEST_TAG"
+        
+        # Remove 'v' prefix for version calculation
+        CURRENT_VERSION=${LATEST_TAG#v}
+        
+        # Split version into parts
+        IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+        MAJOR=${VERSION_PARTS[0]:-0}
+        MINOR=${VERSION_PARTS[1]:-0}
+        PATCH=${VERSION_PARTS[2]:-0}
+        
+        # Check commit messages since last tag for conventional commit patterns
+        COMMITS=$(git rev-list ${LATEST_TAG}..HEAD --oneline 2>/dev/null || git rev-list HEAD --oneline)
+        
+        # Determine version bump based on conventional commits
+        BUMP_TYPE="none"
+        
+        while IFS= read -r commit; do
+          if [[ "$commit" =~ ^[a-f0-9]+[[:space:]]+(feat(\(.+\))?!:|BREAKING[[:space:]]CHANGE:|feat!:|fix!:|perf!:) ]]; then
+            BUMP_TYPE="major"
+            break
+          elif [[ "$commit" =~ ^[a-f0-9]+[[:space:]]+feat(\(.+\))?:[[:space:]] ]]; then
+            if [[ "$BUMP_TYPE" != "major" ]]; then
+              BUMP_TYPE="minor"
+            fi
+          elif [[ "$commit" =~ ^[a-f0-9]+[[:space:]]+(fix|perf)(\(.+\))?:[[:space:]] ]]; then
+            if [[ "$BUMP_TYPE" == "none" ]]; then
+              BUMP_TYPE="patch"
+            fi
+          fi
+        done <<< "$COMMITS"
+        
+        # Calculate new version
+        case $BUMP_TYPE in
+          "major")
+            NEW_VERSION="$((MAJOR + 1)).0.0"
+            SHOULD_RELEASE="true"
+            ;;
+          "minor")
+            NEW_VERSION="$MAJOR.$((MINOR + 1)).0"
+            SHOULD_RELEASE="true"
+            ;;
+          "patch")
+            NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+            SHOULD_RELEASE="true"
+            ;;
+          *)
+            NEW_VERSION="$CURRENT_VERSION"
+            SHOULD_RELEASE="false"
+            ;;
+        esac
+        
+        echo "Bump type: $BUMP_TYPE"
+        echo "New version: v$NEW_VERSION"
+        echo "Should release: $SHOULD_RELEASE"
+        
+        echo "version=v$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "should-release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [test, determine-version]
+    if: needs.determine-version.outputs.should-release == 'true'
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          # Windows ARM64 builds can be flaky, exclude for now
+          - goos: windows
+            goarch: arm64
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        VERSION: ${{ needs.determine-version.outputs.version }}
+      run: |
+        # Create output directory
+        mkdir -p dist
+        
+        # Set binary name with proper extension for Windows
+        BINARY_NAME="flux-${{ matrix.goos }}-${{ matrix.goarch }}"
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          BINARY_NAME="${BINARY_NAME}.exe"
+        fi
+        
+        # Get build info
+        COMMIT_SHA=$(git rev-parse --short HEAD)
+        BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        # Build with version info
+        go build -ldflags="-X main.Version=${VERSION} -X main.Commit=${COMMIT_SHA} -X main.Date=${BUILD_DATE}" -o "dist/${BINARY_NAME}" .
+        
+        # Create archive
+        cd dist
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          zip "${BINARY_NAME%.*}.zip" "${BINARY_NAME}"
+        else
+          tar -czf "${BINARY_NAME}.tar.gz" "${BINARY_NAME}"
+        fi
+        cd ..
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: flux-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: |
+          dist/*.tar.gz
+          dist/*.zip
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [determine-version, build]
+    if: needs.determine-version.outputs.should-release == 'true'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        find artifacts -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} release-assets/
+        ls -la release-assets/
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        # Get commits since last tag for changelog
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        
+        if [ -n "$LATEST_TAG" ]; then
+          COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline --no-merges)
+        else
+          COMMITS=$(git log --oneline --no-merges)
+        fi
+        
+        # Create changelog
+        echo "## Changes" > CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        
+        # Parse conventional commits into categories
+        echo "### ✨ Features" >> CHANGELOG.md
+        echo "$COMMITS" | grep -E "^[a-f0-9]+ feat(\(.+\))?:" | sed 's/^[a-f0-9]\+ /- /' >> CHANGELOG.md || echo "- No new features" >> CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        
+        echo "### 🐛 Bug Fixes" >> CHANGELOG.md
+        echo "$COMMITS" | grep -E "^[a-f0-9]+ fix(\(.+\))?:" | sed 's/^[a-f0-9]\+ /- /' >> CHANGELOG.md || echo "- No bug fixes" >> CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        
+        echo "### 🚀 Performance Improvements" >> CHANGELOG.md
+        echo "$COMMITS" | grep -E "^[a-f0-9]+ perf(\(.+\))?:" | sed 's/^[a-f0-9]\+ /- /' >> CHANGELOG.md || echo "- No performance improvements" >> CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        
+        echo "### 📝 Other Changes" >> CHANGELOG.md
+        echo "$COMMITS" | grep -vE "^[a-f0-9]+ (feat|fix|perf)(\(.+\))?:" | sed 's/^[a-f0-9]\+ /- /' >> CHANGELOG.md || echo "- No other changes" >> CHANGELOG.md
+        
+        # Clean up empty sections
+        sed -i '/^- No /d' CHANGELOG.md
+        
+        echo "Changelog:"
+        cat CHANGELOG.md
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.determine-version.outputs.version }}
+        name: Release ${{ needs.determine-version.outputs.version }}
+        body_path: CHANGELOG.md
+        files: release-assets/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create and push tag
+      run: |
+        git config user.name github-actions
+        git config user.email github-actions@github.com
+        git tag ${{ needs.determine-version.outputs.version }}
+        git push origin ${{ needs.determine-version.outputs.version }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

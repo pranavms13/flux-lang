@@ -19,6 +19,13 @@ import (
 	"github.com/pranavms13/flux-lang/vm"
 )
 
+// Version information (set by build flags)
+var (
+	Version = "dev"
+	Commit  = "unknown"
+	Date    = "unknown"
+)
+
 func init() {
 	// Register types for gob encoding
 	gob.Register(&vm.Chunk{})
@@ -75,6 +82,11 @@ func main() {
 
 	command := os.Args[1]
 	switch command {
+	case "version":
+		fmt.Printf("Flux Language v%s\n", Version)
+		fmt.Printf("Commit: %s\n", Commit)
+		fmt.Printf("Build Date: %s\n", Date)
+		return
 	case "compile":
 		if len(os.Args) < 3 {
 			fmt.Println("Error: compile command requires a file argument")
@@ -258,6 +270,7 @@ func main() {
 func printUsage() {
 	fmt.Println("Usage: flux <command> <file>.flux")
 	fmt.Println("Commands:")
+	fmt.Println("\tversion - Show version information")
 	fmt.Println("\tcompile <file>.flux - Compile the given Flux source file to an executable")
 	fmt.Println("\trun <file>.flux - Run the given Flux source file")
 	fmt.Println("\tinit - Initialize a new Flux project with default configuration")

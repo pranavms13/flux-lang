@@ -110,9 +110,10 @@ Delivery rules for every implementation slice:
 
 ### Baseline preparation
 
-- [ ] Review and checkpoint the existing stabilization changes as their own change set.
-- [ ] Record the exact commit and local toolchains used for the next implementation.
-- [ ] Run the existing suite and retain the intentionally invalid `type_errors.flux` fixture.
+- [x] Review and checkpoint the existing stabilization changes as their own change set.
+      They landed in `503377e`; see [docs/BASELINE.md](BASELINE.md).
+- [x] Record the exact commit and local toolchains used for the next implementation.
+- [x] Run the existing suite and retain the intentionally invalid `type_errors.flux` fixture.
 - [ ] Record parser/checker/VM benchmarks for representative small, nested, and large programs.
 - [ ] Add a fixture manifest that distinguishes valid programs, static errors, runtime errors,
       and mode-dependent programs; never classify an example by filename alone.
@@ -131,15 +132,24 @@ Proposed packages: `source/` and `diagnostic/`. Keep these independent of the AS
 Participle, type checker, and execution engines so the standalone build can include
 them without pulling in the front end.
 
-- [ ] Define a source identifier and immutable source snapshot with original bytes,
-      display filename, and line-start index.
-- [ ] Use half-open byte spans `[start, end)` as the canonical location representation.
-- [ ] Define conversions for terminal line/column and, later, negotiated LSP character units.
-- [ ] Define diagnostics with a stable code, severity, message, primary span, optional
+- [x] Define a source identifier and immutable source snapshot with original bytes,
+      display filename, and line-start index. `source.SourceID`, `source.Source`, and the
+      `source.Map` registry, which is safe for concurrent use.
+- [x] Use half-open byte spans `[start, end)` as the canonical location representation.
+      `source.Span`, with `Union` for composite expressions and `Compare` for ordering.
+- [x] Define conversions for terminal line/column and, later, negotiated LSP character units.
+      `source.Position` counts bytes, runes, UTF-16 code units, and tab-expanded display
+      cells separately; every field is 1-based, and the LSP adapter subtracts one.
+- [x] Define diagnostics with a stable code, severity, message, primary span, optional
       related locations, notes, and optional help. Keep terminal styling out of this model.
-- [ ] Reserve code groups for lexing/parsing, binding, typing, runtime, and internal failures.
-- [ ] Distinguish a source-less tool error, such as an unreadable file, from a language error.
-- [ ] Define deterministic ordering and suppression of downstream errors caused by one root failure.
+- [x] Reserve code groups for lexing/parsing, binding, typing, runtime, and internal failures.
+      `S_`, `B_`, `T_`, `R_`, and `X_`. `diagnostic.Register` declares a code with a
+      description and rejects an unknown group or a duplicate at init time.
+- [x] Distinguish a source-less tool error, such as an unreadable file, from a language error.
+      `diagnostic.ToolError` carries no span and is a distinct type.
+- [x] Define deterministic ordering and suppression of downstream errors caused by one root failure.
+      `diagnostic.Bag` deduplicates identical reports, orders by position then code then
+      arrival, and withholds diagnostics recorded with `AddCausedBy`.
 
 Suggested API shapes, to refine in implementation:
 
@@ -165,6 +175,13 @@ comments in tests even while identifiers remain ASCII. Cover tabs, CRLF, empty
 files, EOF, multiline spans, combining marks, and supplementary-plane characters.
 Define terminal tab expansion explicitly; do not equate a byte offset with a
 terminal display column or LSP UTF-16 column.
+
+Implemented in `source/` and `diagnostic/`, both of which import nothing else in
+the module so the standalone build bundle can include them. Tab expansion is
+explicit: `source.DefaultTabWidth` is 8 and `PositionWithTabWidth` accepts
+another stop width. Display columns count one cell per non-tab rune and so do
+not account for double-width or zero-width characters; that limitation is
+documented on the field rather than hidden.
 
 ### P1.2 — Preserve positions through parsing
 

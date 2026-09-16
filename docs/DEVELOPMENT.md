@@ -18,6 +18,16 @@ source -> lexer -> Participle parser -> AST -> optional type checker
                                                        Go executable
 ```
 
+- `source/` holds immutable source snapshots and the half-open byte spans that
+  locate constructs in them. `Position` derives line and column numbers in four
+  units — bytes, runes, UTF-16 code units, and tab-expanded display cells —
+  because a byte offset is none of those.
+- `diagnostic/` describes reported problems as data: code, severity, message,
+  primary span, related locations, notes, help. A `Bag` orders them
+  deterministically and withholds the follow-on errors that one root failure
+  causes. `ToolError` is the separate, source-less kind for a missing file or a
+  missing Go toolchain. Neither package imports anything else in the module, so
+  the standalone build bundle can include them beside the VM.
 - `ast/` defines the parser grammar. Addition/subtraction bind more tightly than
   comparisons; operators within each level associate left to right.
 - `parser/` configures Participle and returns the AST. Braces can represent a
@@ -58,6 +68,10 @@ initialization, version metadata, and cleanup of generated source files.
 
 `types/types_test.go` covers strict, lenient, warn-only, and disabled modes;
 `config/config_test.go` covers defaults, partial configuration and persistence.
+
+`source/source_test.go` covers tabs, CRLF, empty files, EOF, multiline spans,
+combining marks, and supplementary-plane characters; `diagnostic/diagnostic_test.go`
+covers code groups, builder aliasing, ordering, deduplication, and suppression.
 The existing lexer tests remain in `lexer/tests/`.
 
 When adding language syntax, update the AST, checker, interpreter, compiler/VM,

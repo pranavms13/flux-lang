@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/base64"
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"text/template"
 
@@ -19,264 +22,186 @@ import (
 	"github.com/pranavms13/flux-lang/vm"
 )
 
-// Version information (set by build flags)
+// Version information is set by build flags.
 var (
 	Version = "dev"
 	Commit  = "unknown"
 	Date    = "unknown"
 )
 
-func init() {
-	// Register types for gob encoding
-	gob.Register(&vm.Chunk{})
-	gob.Register([]interface{}{})
-	gob.Register(map[string]interface{}{})
-}
+// Embedding the VM makes compilation independent of the Flux source checkout.
+//
+//go:embed vm/vm.go
+var vmSource string
+
+func init() { gob.RegisterName("flux.Chunk", &vm.Chunk{}) }
 
 const executableTemplate = `package main
 
 import (
-	"bytes"
-	"encoding/base64"
-	"encoding/gob"
-
-	"github.com/pranavms13/flux-lang/vm"
+ "bytes"
+ "encoding/base64"
+ "encoding/gob"
+ "fmt"
+ "os"
 )
 
-func init() {
-	gob.Register(&vm.Chunk{})
-	gob.Register([]interface{}{})
-	gob.Register(map[string]interface{}{})
-}
+func init() { gob.RegisterName("flux.Chunk", &Chunk{}) }
 
 func main() {
-	// Decode the embedded bytecode
-	bytecode, err := base64.StdEncoding.DecodeString("{{.Bytecode}}")
-	if err != nil {
-		panic(err)
-	}
-
-	var chunk vm.Chunk
-	decoder := gob.NewDecoder(bytes.NewReader(bytecode))
-	if err := decoder.Decode(&chunk); err != nil {
-		panic(err)
-	}
-
-	// Execute the bytecode
-	vm.New(&chunk).Run()
+ defer func() {
+  if err := recover(); err != nil { fmt.Fprintln(os.Stderr, "Runtime error:", err); os.Exit(1) }
+ }()
+ bytecode, err := base64.StdEncoding.DecodeString("{{.Bytecode}}")
+ if err != nil { panic(err) }
+ var chunk Chunk
+ if err := gob.NewDecoder(bytes.NewReader(bytecode)).Decode(&chunk); err != nil { panic(err) }
+ New(&chunk).Run()
 }
 `
 
 func main() {
-	if len(os.Args) < 2 {
+	if err := runCLI(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
+
+func runCLI(args []string) (err error) {
+	// Runtime errors are reported as diagnostics instead of Go stack traces.
+	defer func() {
+		if failure := recover(); failure != nil {
+			err = fmt.Errorf("%v", failure)
+		}
+	}()
+	if len(args) == 0 {
 		printUsage()
-		return
+		return nil
 	}
-
-	// Load configuration
-	cfg, err := config.GetConfigFromCurrentDir()
-	if err != nil {
-		fmt.Printf("Warning: Could not load configuration: %v\n", err)
-		cfg = config.DefaultConfig()
-	}
-
-	command := os.Args[1]
-	switch command {
-	case "version":
-		fmt.Printf("Flux Language v%s\n", Version)
-		fmt.Printf("Commit: %s\n", Commit)
-		fmt.Printf("Build Date: %s\n", Date)
-		return
-	case "compile":
-		if len(os.Args) < 3 {
-			fmt.Println("Error: compile command requires a file argument")
-			printUsage()
-			return
-		}
-		source, err := os.ReadFile(os.Args[2])
-		if err != nil {
-			panic(err)
-		}
-
-		// Step 1: Parse
-		prog, err := parser.Parse(string(source))
-		if err != nil {
-			panic(err)
-		}
-
-		// Step 2: Type Check (if enabled)
-		if cfg.TypeChecking.Enabled {
-			typeChecker := types.NewTypeCheckerWithConfig(types.TypeCheckingMode{
-				Strict:   cfg.TypeChecking.Strict,
-				WarnOnly: cfg.TypeChecking.WarnOnly,
-				Enabled:  cfg.TypeChecking.Enabled,
-			})
-
-			typeChecker.CheckProgram(prog)
-
-			// Display warnings if any
-			if typeChecker.HasWarnings() {
-				fmt.Println("Type checking warnings:")
-				for _, warning := range typeChecker.GetWarnings() {
-					fmt.Printf("  - %s\n", warning)
-				}
-			}
-
-			// Handle errors
-			if typeChecker.HasErrors() {
-				fmt.Println("Type checking errors:")
-				for _, error := range typeChecker.GetErrors() {
-					fmt.Printf("  - %s\n", error)
-				}
-				fmt.Println("Compilation failed due to type errors.")
-				os.Exit(1)
-			}
-		}
-
-		// Step 3: Compile to bytecode
-		chunk := compiler.NewFluxCompiler().Compile(prog)
-
-		// Step 4: Create temporary file for bytecode
-		tempFile, err := os.CreateTemp("", "flux-bytecode-*.gob")
-		if err != nil {
-			panic(err)
-		}
-		defer os.Remove(tempFile.Name())
-
-		// Encode bytecode to temporary file
-		encoder := gob.NewEncoder(tempFile)
-		if err := encoder.Encode(chunk); err != nil {
-			panic(err)
-		}
-		tempFile.Close()
-
-		// Read the encoded bytecode
-		bytecode, err := os.ReadFile(tempFile.Name())
-		if err != nil {
-			panic(err)
-		}
-
-		// Base64 encode the bytecode
-		base64Bytecode := base64.StdEncoding.EncodeToString(bytecode)
-
-		// Create output directory if it doesn't exist
-		outputDir := "dist"
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			panic(err)
-		}
-
-		// Create the executable source file
-		baseName := filepath.Base(os.Args[2])
-		execName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-		execSource := filepath.Join(outputDir, execName+".go")
-
-		// Create and write the executable source
-		tmpl, err := template.New("executable").Parse(executableTemplate)
-		if err != nil {
-			panic(err)
-		}
-
-		execFile, err := os.Create(execSource)
-		if err != nil {
-			panic(err)
-		}
-		defer execFile.Close()
-
-		if err := tmpl.Execute(execFile, map[string]string{
-			"Bytecode": base64Bytecode,
-		}); err != nil {
-			panic(err)
-		}
-
-		// Build the executable
-		cmd := exec.Command("go", "build", "-o", filepath.Join(outputDir, execName), execSource)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("Build error: %v\n", err)
-			fmt.Printf("stdout: %s\n", stdout.String())
-			fmt.Printf("stderr: %s\n", stderr.String())
-			panic(err)
-		}
-
-		// Remove the intermediate .go source file
-		if err := os.Remove(execSource); err != nil {
-			fmt.Printf("Warning: Could not remove intermediate source file: %v\n", err)
-		}
-
-		fmt.Printf("Compiled executable created at %s\n", filepath.Join(outputDir, execName))
-
-	case "run":
-		if len(os.Args) < 3 {
-			fmt.Println("Error: run command requires a file argument")
-			printUsage()
-			return
-		}
-		source, err := os.ReadFile(os.Args[2])
-		if err != nil {
-			panic(err)
-		}
-
-		// Step 1: Parse
-		prog, err := parser.Parse(string(source))
-		if err != nil {
-			panic(err)
-		}
-
-		// Step 2: Type Check (if enabled)
-		if cfg.TypeChecking.Enabled {
-			typeChecker := types.NewTypeCheckerWithConfig(types.TypeCheckingMode{
-				Strict:   cfg.TypeChecking.Strict,
-				WarnOnly: cfg.TypeChecking.WarnOnly,
-				Enabled:  cfg.TypeChecking.Enabled,
-			})
-
-			typeChecker.CheckProgram(prog)
-
-			// Display warnings if any
-			if typeChecker.HasWarnings() {
-				fmt.Println("Type checking warnings:")
-				for _, warning := range typeChecker.GetWarnings() {
-					fmt.Printf("  - %s\n", warning)
-				}
-			}
-
-			// Handle errors
-			if typeChecker.HasErrors() {
-				fmt.Println("Type checking errors:")
-				for _, error := range typeChecker.GetErrors() {
-					fmt.Printf("  - %s\n", error)
-				}
-				fmt.Println("Execution failed due to type errors.")
-				os.Exit(1)
-			}
-		}
-
-		// Step 3: Run
-		runtime.Run(prog)
+	switch args[0] {
+	case "help", "--help", "-h":
+		printUsage()
+		return nil
+	case "version", "--version":
+		fmt.Printf("Flux Language v%s\nCommit: %s\nBuild Date: %s\n", strings.TrimPrefix(Version, "v"), Commit, Date)
+		return nil
 	case "init":
-		// Initialize a new Flux project with default configuration
+		if len(args) != 1 {
+			return fmt.Errorf("usage: flux init")
+		}
 		if err := initializeProject(); err != nil {
-			fmt.Printf("Error initializing project: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		fmt.Println("Initialized new Flux project with flux.json configuration file")
+		return nil
+	case "run", "compile":
+		if len(args) != 2 {
+			return fmt.Errorf("%s command requires one file argument", args[0])
+		}
 	default:
-		printUsage()
+		return fmt.Errorf("unknown command %q; use flux help", args[0])
 	}
+	cfg, err := config.GetConfigFromCurrentDir()
+	if err != nil {
+		return err
+	}
+	source, err := os.ReadFile(args[1])
+	if err != nil {
+		return err
+	}
+	prog, err := parser.Parse(string(source))
+	if err != nil {
+		return fmt.Errorf("%s: %w", args[1], err)
+	}
+	tc := types.NewTypeCheckerWithConfig(types.TypeCheckingMode{
+		Strict: cfg.TypeChecking.Strict, WarnOnly: cfg.TypeChecking.WarnOnly, Enabled: cfg.TypeChecking.Enabled,
+	})
+	tc.CheckProgram(prog)
+	if tc.HasWarnings() {
+		fmt.Fprintln(os.Stderr, "Type checking warnings:")
+		for _, warning := range tc.GetWarnings() {
+			fmt.Fprintf(os.Stderr, "  - %s\n", warning)
+		}
+	}
+	if tc.HasErrors() {
+		return fmt.Errorf("type checking failed:\n  - %s", strings.Join(tc.GetErrors(), "\n  - "))
+	}
+	if args[0] == "run" {
+		runtime.Run(prog)
+		return nil
+	}
+	output, err := compileExecutable(compiler.NewFluxCompiler().Compile(prog), args[1])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Compiled executable created at %s\n", output)
+	return nil
+}
+
+func compileExecutable(chunk *vm.Chunk, sourcePath string) (string, error) {
+	var bytecode bytes.Buffer
+	if err := gob.NewEncoder(&bytecode).Encode(chunk); err != nil {
+		return "", err
+	}
+	tempDir, err := os.MkdirTemp("", "flux-build-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tempDir)
+	tmpl, err := template.New("executable").Parse(executableTemplate)
+	if err != nil {
+		return "", err
+	}
+	var generated bytes.Buffer
+	if err := tmpl.Execute(&generated, map[string]string{"Bytecode": base64.StdEncoding.EncodeToString(bytecode.Bytes())}); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "main.go"), generated.Bytes(), 0600); err != nil {
+		return "", err
+	}
+	standaloneVM := strings.Replace(vmSource, "package vm", "package main", 1)
+	if err := os.WriteFile(filepath.Join(tempDir, "vm.go"), []byte(standaloneVM), 0600); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll("dist", 0755); err != nil {
+		return "", err
+	}
+	name := strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+	if goruntime.GOOS == "windows" {
+		name += ".exe"
+	}
+	output := filepath.Join("dist", name)
+	absoluteOutput, err := filepath.Abs(output)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("go", "build", "-o", absoluteOutput, "main.go", "vm.go")
+	cmd.Dir = tempDir
+	if result, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("build executable (Go must be installed): %w\n%s", err, result)
+	}
+	return output, nil
 }
 
 func printUsage() {
-	fmt.Println("Usage: flux <command> <file>.flux")
+	fmt.Println("Usage: flux <command> [file.flux]")
 	fmt.Println("Commands:")
 	fmt.Println("\tversion - Show version information")
-	fmt.Println("\tcompile <file>.flux - Compile the given Flux source file to an executable")
-	fmt.Println("\trun <file>.flux - Run the given Flux source file")
-	fmt.Println("\tinit - Initialize a new Flux project with default configuration")
+	fmt.Println("\tcompile <file.flux> - Compile to a standalone executable (requires Go)")
+	fmt.Println("\trun <file.flux> - Run a Flux source file")
+	fmt.Println("\tinit - Create a flux.json configuration file")
 }
 
 func initializeProject() error {
-	cfg := config.DefaultConfig()
-	return config.SaveConfig(cfg, ".")
+	f, err := os.OpenFile("flux.json", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return fmt.Errorf("initialize project: %w", err)
+	}
+	encoder := json.NewEncoder(f)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(config.DefaultConfig()); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

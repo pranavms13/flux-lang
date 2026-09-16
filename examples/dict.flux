@@ -1,37 +1,24 @@
-// Create a dictionary
-let dict = {
+// Dictionary keys and values each have a consistent type.
+let person: {string: string} = {
     "name": "John",
-    "age": 30,
     "city": "New York"
 }
+let ages: {string: int} = {"John": 30, "Alice": 25}
+print(person["name"])
+print(ages["John"])
+print(person["city"])
 
-// Access dictionary values
-print(dict["name"])
-print(dict["age"])
-print(dict["city"])
+let numbers = {"number": 42}
+let messages = {"text": "Hello"}
+let flags = {"boolean": true}
+print(numbers["number"])
+print(messages["text"])
+print(flags["boolean"])
 
-// Dictionaries can have mixed value types
-let mixed = {
-    "number": 42,
-    "text": "Hello",
-    "boolean": true
-}
-
-print(mixed["number"])
-print(mixed["text"])
-print(mixed["boolean"])
-
-// Nested dictionaries
+// Nested dictionaries also use consistent value types.
 let nested = {
-    "person": {
-        "name": "Alice",
-        "age": 25
-    },
-    "location": {
-        "city": "London",
-        "country": "UK"
-    }
+    "person": {"name": "Alice", "city": "London"},
+    "location": {"city": "London", "country": "UK"}
 }
-
 print(nested["person"]["name"])
 print(nested["location"]["city"])

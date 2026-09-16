@@ -29,7 +29,7 @@
 		"patterns": [
 		  {
 			"name": "keyword.control.flux",
-			"match": "\\b(let|fn|if|then|else|return)\\b"
+			"match": "\\b(let|fn|if|then|else|int|string|bool|void)\\b"
 		  }
 		]
 	  },
@@ -37,7 +37,7 @@
 		"patterns": [
 		  {
 			"name": "constant.language.boolean.flux",
-			"match": "\\b(true|false)\\b"
+			"match": "\\b(true|false|yes|no)\\b"
 		  }
 		]
 	  },
@@ -45,7 +45,7 @@
 		"patterns": [
 		  {
 			"name": "keyword.operator.flux",
-			"match": "\\+|\\-|\\*|\\/|==|=|<|>"
+			"match": "=>|->|==|[+\\-=<>]"
 		  }
 		]
 	  },

@@ -3,7 +3,7 @@
 # Variables
 GO_VERSION := 1.23.2
 BINARY_NAME := flux
-VERSION := $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 COMMIT := $(shell git rev-parse --short HEAD)
 DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.Date=$(DATE)
@@ -11,6 +11,10 @@ LDFLAGS := -X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.Date=$(DA
 # Build directories
 BUILD_DIR := dist
 SCRIPTS_DIR := scripts
+GO_BIN := $(shell go env GOBIN)
+ifeq ($(GO_BIN),)
+GO_BIN := $(shell go env GOPATH)/bin
+endif
 
 # Default target
 .PHONY: all
@@ -76,14 +80,16 @@ package: build-all ## Create distribution packages
 	@echo "Creating distribution packages..."
 	@cd $(BUILD_DIR) && \
 	for binary in $(BINARY_NAME)-linux-*; do \
+		case "$$binary" in *.tar.gz) continue ;; esac; \
 		echo "Packaging $$binary..."; \
-		tar -czf $$binary.tar.gz $$binary; \
+		COPYFILE_DISABLE=1 tar -czf $$binary.tar.gz $$binary; \
 	done
 	
 	@cd $(BUILD_DIR) && \
 	for binary in $(BINARY_NAME)-darwin-*; do \
+		case "$$binary" in *.tar.gz) continue ;; esac; \
 		echo "Packaging $$binary..."; \
-		tar -czf $$binary.tar.gz $$binary; \
+		COPYFILE_DISABLE=1 tar -czf $$binary.tar.gz $$binary; \
 	done
 	
 	@cd $(BUILD_DIR) && \
@@ -104,8 +110,9 @@ dev: ## Build and run for development
 .PHONY: install
 install: build ## Install binary to local Go bin
 	@echo "Installing $(BINARY_NAME) to Go bin..."
-	@go install -ldflags="$(LDFLAGS)" .
-	@echo "Installed: $(shell go env GOPATH)/bin/$(BINARY_NAME)"
+	@mkdir -p "$(GO_BIN)"
+	@install -m 755 $(BUILD_DIR)/$(BINARY_NAME) "$(GO_BIN)/$(BINARY_NAME)"
+	@echo "Installed: $(GO_BIN)/$(BINARY_NAME)"
 
 # Testing
 .PHONY: test
@@ -116,7 +123,7 @@ test: ## Run tests
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage
 	@echo "Running tests with coverage..."
-	@go test -v -race -coverprofile=coverage.out ./...
+	@go test -v -race -coverpkg=./... -coverprofile=coverage.out ./...
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
@@ -161,12 +168,12 @@ version-suggest: ## Suggest next version
 	@$(SCRIPTS_DIR)/version.sh suggest
 
 .PHONY: version-create
-version-create: ## Create new version (usage: make version-create VERSION=1.2.3)
-	@if [ -z "$(VERSION)" ]; then \
-		echo "Error: VERSION is required. Usage: make version-create VERSION=1.2.3"; \
+version-create: ## Create new version (usage: make version-create NEW_VERSION=1.2.3)
+	@if [ -z "$(NEW_VERSION)" ]; then \
+		echo "Error: NEW_VERSION is required. Usage: make version-create NEW_VERSION=1.2.3"; \
 		exit 1; \
 	fi
-	@$(SCRIPTS_DIR)/version.sh create $(VERSION)
+	@$(SCRIPTS_DIR)/version.sh create $(NEW_VERSION)
 
 # Example commands
 .PHONY: example
@@ -180,7 +187,7 @@ example: build ## Build and run example
 .PHONY: docs
 docs: ## Generate documentation
 	@echo "Generating documentation..."
-	@go doc ./...
+	@for pkg in $$(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...); do go doc "$$pkg" || exit $$?; done
 
 # Release preparation
 .PHONY: release-prep

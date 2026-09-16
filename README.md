@@ -42,8 +42,8 @@ The `flux.json` file supports the following options:
     "enabled": true         // Enable/disable type checking entirely
   },
   "compiler": {
-    "optimizationLevel": 1, // Compilation optimization level (0-3)
-    "debug": false          // Enable debug information
+    "optimizationLevel": 1, // Reserved for future optimization support
+    "debug": false          // Reserved for future debug information
   }
 }
 ```
@@ -66,7 +66,8 @@ The `flux.json` file supports the following options:
 #### 2. **Lenient** (`strict: false, warnOnly: false`)
 - **Default mode**
 - Type checking with some flexibility
-- Mixed-type operations issue warnings but may be allowed
+- Truthy conditions and differing branch types issue warnings
+- Invalid arithmetic and annotated assignments remain errors; no implicit conversion is performed
 - Good for gradual adoption
 
 ```json
@@ -97,7 +98,7 @@ The `flux.json` file supports the following options:
 - Maximum type safety
 - No implicit conversions
 - All type mismatches are errors
-- Recommended for production code
+- Use explicit function signatures for the strongest checking
 
 ```json
 {
@@ -111,7 +112,7 @@ The `flux.json` file supports the following options:
 
 ## Type System
 
-Flux includes a comprehensive type system that provides compile-time type safety:
+Flux checks concrete types and annotations before execution. Untyped function parameters use an unknown type; inference is not yet a full constraint solver.
 
 ### Basic Types
 - `int`: Integer numbers
@@ -161,7 +162,7 @@ go build -o dist/flux
 ./dist/flux init
 ```
 
-This creates a `flux.json` configuration file with sensible defaults.
+This creates a `flux.json` configuration file with sensible defaults and refuses to overwrite an existing file. Configuration is read from the current working directory.
 
 #### To run a Flux program:
 
@@ -175,6 +176,8 @@ For example:
 ```
 
 #### To compile a Flux program to a binary:
+
+Compilation requires Go on `PATH`, and writes the executable to `dist/`. The generated executable runs independently of Go and the Flux source checkout.
 
 ```bash
 ./dist/flux compile <filename>
@@ -241,16 +244,17 @@ print(greeting)
 
 ## Type Checking Examples
 
+The diagnostic excerpts below are abbreviated.
+
 ### Strict Mode
 ```bash
 # Set strict: true in flux.json
 ./dist/flux run examples/type_errors.flux
 ```
 ```
-Type checking errors:
+Error: type checking failed:
   - type mismatch: variable x declared as int but assigned string
   - if branches must have same type: then=int, else=string
-Execution failed due to type errors.
 ```
 
 ### Lenient Mode
@@ -260,10 +264,9 @@ Execution failed due to type errors.
 ```
 ```
 Type checking warnings:
-  - if branches must have same type: then=int, else=string (using union type)
-Type checking errors:
+  - if branches must have same type: then=int, else=string (using unknown type)
+Error: type checking failed:
   - type mismatch: variable x declared as int but assigned string
-Execution failed due to type errors.
 ```
 
 ### Warn-Only Mode
@@ -274,11 +277,11 @@ Execution failed due to type errors.
 ```
 Type checking warnings:
   - type mismatch: variable x declared as int but assigned string
-  - if branches must have same type: then=int, else=string (using union type)
+  - if branches must have same type: then=int, else=string (using unknown type)
 # Code attempts to execute...
 ```
 
-For more examples, look into [Examples](./examples)
+For more examples, look into [Examples](./examples). `type_errors.flux` is intentionally invalid; the other examples run with the default configuration.
 
 ## Configuration Examples
 
@@ -311,10 +314,21 @@ To use the Flux Language extension in VS Code:
 The extension provides:
 - Syntax highlighting for `.flux` files
 - Basic language support
-- Code snippets
 - Bracket matching
 - Comment toggling
 
+
+## Development
+
+See [the development baseline](docs/DEVELOPMENT.md) for the execution pipeline, validation commands, current limitations, and next priorities.
+
+```bash
+make check
+make test-coverage
+make build-all
+```
+
+`+` and `-` associate left to right and bind more tightly than `==`, `<`, and `>`. Use parentheses to group expressions. `print(value)` outputs immediately and returns void.
 
 ## Project Structure
 

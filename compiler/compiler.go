@@ -1,212 +1,166 @@
 package compiler
 
 import (
+	"encoding/binary"
+
 	"github.com/pranavms13/flux-lang/ast"
 	"github.com/pranavms13/flux-lang/vm"
 )
 
-type FluxCompiler struct {
-	chunk *vm.Chunk
-	// Add type tracking
-	globalTypes map[string]string // Maps variable names to their types
-}
+type FluxCompiler struct{ chunk *vm.Chunk }
 
-func NewFluxCompiler() *FluxCompiler {
-	return &FluxCompiler{
-		chunk:       &vm.Chunk{},
-		globalTypes: make(map[string]string),
-	}
-}
+func NewFluxCompiler() *FluxCompiler { return &FluxCompiler{} }
 
 func (c *FluxCompiler) Compile(prog *ast.Program) *vm.Chunk {
+	c.chunk = &vm.Chunk{}
 	for _, stmt := range prog.Statements {
-		c.compileStmt(stmt)
+		if stmt.Let != nil {
+			c.compileExpr(stmt.Let.Expr)
+			c.emit(vm.OpDefineGlobal, c.addConstant(stmt.Let.Name))
+		} else {
+			c.compileExpr(stmt.Expr)
+			c.emit(vm.OpPrint)
+		}
 	}
 	c.emit(vm.OpReturn)
 	return c.chunk
 }
 
-func (c *FluxCompiler) compileStmt(stmt *ast.Statement) {
-	if stmt.Expr != nil {
-		c.compileExpr(stmt.Expr)
-		// Only print if it's not a print call and not an array indexing
-		isPrint := false
-		isIndexing := false
-		if stmt.Expr.Primary != nil {
-			if stmt.Expr.Primary.Base != nil && stmt.Expr.Primary.Base.Term != nil && stmt.Expr.Primary.Base.Term.Ident != nil && *stmt.Expr.Primary.Base.Term.Ident == "print" {
-				if len(stmt.Expr.Primary.Postfix) > 0 && stmt.Expr.Primary.Postfix[0].Call != nil {
-					isPrint = true
-				}
-			}
-			if len(stmt.Expr.Primary.Postfix) > 0 && stmt.Expr.Primary.Postfix[0].Index != nil {
-				isIndexing = true
-			}
-		}
-		if !isPrint && !isIndexing {
-			c.emit(vm.OpPrint)
-		}
-	} else if stmt.Let != nil {
-		c.compileExpr(stmt.Let.Expr)
-		// Store the value in globals
-		idx := c.addConstant(stmt.Let.Name)
-		c.emit(vm.OpDefineGlobal, byte(idx))
-
-		// Track the type of the variable
-		if stmt.Let.Expr.Primary != nil {
-			if stmt.Let.Expr.Primary.Base != nil {
-				if stmt.Let.Expr.Primary.Base.List != nil {
-					c.globalTypes[stmt.Let.Name] = "list"
-				} else if stmt.Let.Expr.Primary.Base.Dict != nil {
-					c.globalTypes[stmt.Let.Name] = "dict"
-				}
-			}
-		}
-	}
-}
-
+// Every expression leaves exactly one value on the stack (nil for void).
 func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
-	if expr == nil {
-		return
-	}
 	switch {
 	case expr.Primary != nil:
-		// Compile the base value
-		if expr.Primary.Base != nil {
-			if expr.Primary.Base.Term != nil {
-				t := expr.Primary.Base.Term
-				if t.Number != nil {
-					idx := c.addConstant(*t.Number)
-					c.emit(vm.OpConstant, byte(idx))
-				}
-				if t.String != nil {
-					idx := c.addConstant(*t.String)
-					c.emit(vm.OpConstant, byte(idx))
-				}
-				if t.Bool != nil {
-					idx := c.addConstant(*t.Bool)
-					c.emit(vm.OpConstant, byte(idx))
-				}
-				if t.Ident != nil {
-					idx := c.addConstant(*t.Ident)
-					c.emit(vm.OpGetGlobal, byte(idx))
-				}
-			} else if expr.Primary.Base.List != nil {
-				// First compile all elements
-				for _, e := range expr.Primary.Base.List.Elems {
-					c.compileExpr(e)
-				}
-				// Then create the array from the elements
-				c.emit(vm.OpArray, byte(len(expr.Primary.Base.List.Elems)))
-			} else if expr.Primary.Base.Dict != nil {
-				// First compile all key-value pairs
-				for _, pair := range expr.Primary.Base.Dict.Pairs {
-					c.compileExpr(pair.Value)
-					c.compileExpr(pair.Key)
-				}
-				// Then create the dictionary from the pairs
-				c.emit(vm.OpDict, byte(len(expr.Primary.Base.Dict.Pairs)))
-			}
-		}
-		// Compile chained postfix expressions
-		for _, pf := range expr.Primary.Postfix {
-			if pf.Call != nil {
-				// First compile all arguments
-				for _, arg := range pf.Call.Args {
-					c.compileExpr(arg)
-				}
-				// Then emit the call instruction
-				c.emit(vm.OpCall, byte(len(pf.Call.Args)))
-			} else if pf.Index != nil {
-				c.compileExpr(pf.Index.Index)
-				// Check if we're accessing a dictionary by looking at the base expression
-				if expr.Primary.Base != nil && expr.Primary.Base.Dict != nil {
-					c.emit(vm.OpIndex)
-				} else if expr.Primary.Base != nil && expr.Primary.Base.List != nil {
-					c.emit(vm.OpIndex)
-				} else if expr.Primary.Base != nil && expr.Primary.Base.Term != nil && expr.Primary.Base.Term.Ident != nil {
-					// For variable access, check the tracked type
-					varName := *expr.Primary.Base.Term.Ident
-					if varType, ok := c.globalTypes[varName]; ok {
-						if varType == "dict" {
-							c.emit(vm.OpIndex)
-						} else if varType == "list" {
-							c.emit(vm.OpIndex)
-						} else {
-							// If type is unknown, use OpIndex which will do runtime type checking
-							c.emit(vm.OpIndex)
-						}
-					} else {
-						// If type is unknown, use OpIndex which will do runtime type checking
-						c.emit(vm.OpIndex)
-					}
-				} else {
-					c.emit(vm.OpIndex)
-				}
-			}
-		}
+		c.compilePrimary(expr.Primary)
 	case expr.Block != nil:
-		for _, e := range expr.Block.Exprs {
-			c.compileExpr(e)
-		}
+		c.compileBlock(expr.Block)
 	case expr.If != nil:
 		c.compileExpr(expr.If.Cond)
-		jumpIfFalsePos := len(c.chunk.Code)
-		c.emit(vm.OpJumpIfFalse, 0)
+		falseJump := c.emit(vm.OpJumpIfFalse, 0)
 		c.compileExpr(expr.If.ThenExpr)
-		jumpToEndPos := len(c.chunk.Code)
-		c.emit(vm.OpJump, 0)
-		elsePos := len(c.chunk.Code)
-		c.chunk.Code[jumpIfFalsePos+1] = byte(elsePos)
+		endJump := c.emit(vm.OpJump, 0)
+		c.patchJump(falseJump)
 		c.compileExpr(expr.If.ElseExpr)
-		endPos := len(c.chunk.Code)
-		c.chunk.Code[jumpToEndPos+1] = byte(endPos)
+		c.patchJump(endJump)
 	case expr.Func != nil:
-		// Extract parameter names from FuncParam structures
-		paramNames := make([]string, len(expr.Func.Params))
-		for i, param := range expr.Func.Params {
-			paramNames[i] = param.Name
+		params := make([]string, len(expr.Func.Params))
+		for i, p := range expr.Func.Params {
+			params[i] = p.Name
 		}
-
-		fnChunk := &vm.Chunk{
-			Params: paramNames,
-		}
-		oldChunk := c.chunk
-		c.chunk = fnChunk
+		outer := c.chunk
+		c.chunk = &vm.Chunk{Params: params}
 		c.compileExpr(expr.Func.Body)
 		c.emit(vm.OpReturn)
-		c.chunk = oldChunk
-		idx := c.addConstant(fnChunk)
-		c.emit(vm.OpClosure, byte(idx))
+		fn := c.chunk
+		c.chunk = outer
+		c.emit(vm.OpClosure, c.addConstant(fn))
 	case expr.Bin != nil:
-		if expr.Bin.Left != nil {
-			c.compileExpr(&ast.Expr{Primary: expr.Bin.Left})
-		}
-		if expr.Bin.Right != nil {
-			c.compileExpr(expr.Bin.Right)
-		}
-		if expr.Bin.Operator != nil {
-			switch *expr.Bin.Operator {
-			case "+":
-				c.emit(vm.OpAdd)
-			case "-":
-				c.emit(vm.OpSub)
-			case "==":
-				c.emit(vm.OpEqual)
-			case ">":
-				c.emit(vm.OpGreater)
-			case "<":
-				c.emit(vm.OpLess)
-			}
+		c.compileAdditive(expr.Bin.Left)
+		for _, rest := range expr.Bin.Rest {
+			c.compileAdditive(rest.Right)
+			c.compileOperator(rest.Operator)
 		}
 	}
 }
 
-func (c *FluxCompiler) emit(op vm.Opcode, operands ...byte) {
-	c.chunk.Code = append(c.chunk.Code, byte(op))
-	c.chunk.Code = append(c.chunk.Code, operands...)
+func (c *FluxCompiler) compileAdditive(expr *ast.Additive) {
+	c.compilePrimary(expr.Left)
+	for _, rest := range expr.Rest {
+		c.compilePrimary(rest.Right)
+		c.compileOperator(rest.Operator)
+	}
 }
 
-func (c *FluxCompiler) addConstant(val interface{}) int {
-	c.chunk.Constants = append(c.chunk.Constants, val)
+func (c *FluxCompiler) compileOperator(op string) {
+	switch op {
+	case "+":
+		c.emit(vm.OpAdd)
+	case "-":
+		c.emit(vm.OpSub)
+	case "==":
+		c.emit(vm.OpEqual)
+	case ">":
+		c.emit(vm.OpGreater)
+	case "<":
+		c.emit(vm.OpLess)
+	default:
+		panic("unsupported operator: " + op)
+	}
+}
+
+func (c *FluxCompiler) compileBlock(block *ast.BlockExpr) {
+	if len(block.Exprs) == 0 {
+		c.emit(vm.OpConstant, c.addConstant(nil))
+		return
+	}
+	for i, expr := range block.Exprs {
+		c.compileExpr(expr)
+		if i < len(block.Exprs)-1 {
+			c.emit(vm.OpPop)
+		}
+	}
+}
+
+func (c *FluxCompiler) compilePrimary(expr *ast.PrimaryExpr) {
+	base := expr.Base
+	switch {
+	case base.Term != nil:
+		t := base.Term
+		switch {
+		case t.Number != nil:
+			c.emit(vm.OpConstant, c.addConstant(*t.Number))
+		case t.String != nil:
+			c.emit(vm.OpConstant, c.addConstant(*t.String))
+		case t.Bool != nil:
+			c.emit(vm.OpConstant, c.addConstant(bool(*t.Bool)))
+		case t.Ident != nil:
+			c.emit(vm.OpGetGlobal, c.addConstant(*t.Ident))
+		}
+	case base.Group != nil:
+		c.compileExpr(base.Group.Expr)
+	case base.Block != nil:
+		c.compileBlock(base.Block)
+	case base.List != nil:
+		for _, elem := range base.List.Elems {
+			c.compileExpr(elem)
+		}
+		c.emit(vm.OpArray, len(base.List.Elems))
+	case base.Dict != nil:
+		for _, pair := range base.Dict.Pairs {
+			c.compileExpr(pair.Key)
+			c.compileExpr(pair.Value)
+		}
+		c.emit(vm.OpDict, len(base.Dict.Pairs))
+	}
+	for _, postfix := range expr.Postfix {
+		if postfix.Call != nil {
+			for _, arg := range postfix.Call.Args {
+				c.compileExpr(arg)
+			}
+			c.emit(vm.OpCall, len(postfix.Call.Args))
+		} else {
+			c.compileExpr(postfix.Index.Index)
+			c.emit(vm.OpIndex)
+		}
+	}
+}
+
+func (c *FluxCompiler) emit(op vm.Opcode, operands ...int) int {
+	pos := len(c.chunk.Code)
+	c.chunk.Code = append(c.chunk.Code, byte(op))
+	for _, operand := range operands {
+		if operand < 0 || uint64(operand) > uint64(^uint32(0)) {
+			panic("bytecode operand too large")
+		}
+		c.chunk.Code = binary.BigEndian.AppendUint32(c.chunk.Code, uint32(operand))
+	}
+	return pos
+}
+
+func (c *FluxCompiler) patchJump(pos int) {
+	binary.BigEndian.PutUint32(c.chunk.Code[pos+1:pos+5], uint32(len(c.chunk.Code)))
+}
+
+func (c *FluxCompiler) addConstant(value interface{}) int {
+	c.chunk.Constants = append(c.chunk.Constants, value)
 	return len(c.chunk.Constants) - 1
 }

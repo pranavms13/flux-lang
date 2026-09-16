@@ -47,9 +47,11 @@ type PrimaryExpr struct {
 }
 
 type BaseExpr struct {
-	Term *Term     `parser:"  @@"`
-	List *ListExpr `parser:"| @@"`
-	Dict *DictExpr `parser:"| @@"`
+	Term  *Term      `parser:"  @@"`
+	Group *GroupExpr `parser:"| @@"`
+	List  *ListExpr  `parser:"| @@"`
+	Dict  *DictExpr  `parser:"| @@"`
+	Block *BlockExpr `parser:"| @@"`
 }
 
 type Postfix struct {
@@ -110,10 +112,10 @@ type FuncType struct {
 }
 
 type Term struct {
-	Number *int    `parser:"  @Int"`
-	String *string `parser:"| @String"`
-	Ident  *string `parser:"| @Ident"`
-	Bool   *bool   `parser:"| @Bool"`
+	Number *int     `parser:"  @Int"`
+	String *string  `parser:"| @String"`
+	Ident  *string  `parser:"| @Ident"`
+	Bool   *Boolean `parser:"| @Bool"`
 }
 
 type CallExpr struct {
@@ -122,10 +124,37 @@ type CallExpr struct {
 	RParen string  `parser:"')'"`
 }
 
+// Binary separates comparisons from addition/subtraction to preserve precedence.
 type Binary struct {
-	Left     *PrimaryExpr `parser:"@@"`
-	Operator *string      `parser:"( @('+' | '-' | '==' | '<' | '>')"`
-	Right    *Expr        `parser:"  @@)?"`
+	Left *Additive     `parser:"@@"`
+	Rest []*Comparison `parser:"@@*"`
+}
+
+type Comparison struct {
+	Operator string    `parser:"@('==' | '<' | '>')"`
+	Right    *Additive `parser:"@@"`
+}
+
+type Additive struct {
+	Left *PrimaryExpr `parser:"@@"`
+	Rest []*Addition  `parser:"@@*"`
+}
+
+type Addition struct {
+	Operator string       `parser:"@('+' | '-')"`
+	Right    *PrimaryExpr `parser:"@@"`
+}
+
+type GroupExpr struct {
+	Expr *Expr `parser:"'(' @@ ')'"`
+}
+
+// Boolean captures the literal's value, rather than whether a token was present.
+type Boolean bool
+
+func (b *Boolean) Capture(values []string) error {
+	*b = values[0] == "true" || values[0] == "yes"
+	return nil
 }
 
 type IndexExpr struct {

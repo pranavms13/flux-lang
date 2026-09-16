@@ -42,7 +42,7 @@ func (t ListType) String() string {
 
 func (t ListType) Equals(other FluxType) bool {
 	if otherList, ok := other.(ListType); ok {
-		return t.ElementType.Equals(otherList.ElementType)
+		return TypesEqual(t.ElementType, otherList.ElementType)
 	}
 	return false
 }
@@ -58,7 +58,7 @@ func (t DictType) String() string {
 
 func (t DictType) Equals(other FluxType) bool {
 	if otherDict, ok := other.(DictType); ok {
-		return t.KeyType.Equals(otherDict.KeyType) && t.ValueType.Equals(otherDict.ValueType)
+		return TypesEqual(t.KeyType, otherDict.KeyType) && TypesEqual(t.ValueType, otherDict.ValueType)
 	}
 	return false
 }
@@ -82,11 +82,11 @@ func (t FunctionType) Equals(other FluxType) bool {
 			return false
 		}
 		for i, param := range t.ParamTypes {
-			if !param.Equals(otherFunc.ParamTypes[i]) {
+			if !TypesEqual(param, otherFunc.ParamTypes[i]) {
 				return false
 			}
 		}
-		return t.ReturnType.Equals(otherFunc.ReturnType)
+		return TypesEqual(t.ReturnType, otherFunc.ReturnType)
 	}
 	return false
 }
@@ -98,6 +98,11 @@ func (UnknownType) String() string { return "unknown" }
 func (t UnknownType) Equals(other FluxType) bool {
 	// Unknown type is compatible with any type during inference
 	return true
+}
+
+func isUnknown(t FluxType) bool {
+	_, ok := t.(UnknownType)
+	return ok
 }
 
 // TypesEqual provides symmetric type equality checking.
@@ -204,6 +209,9 @@ func (tc *TypeChecker) HasWarnings() bool {
 
 // Type checking methods
 func (tc *TypeChecker) CheckProgram(prog *ast.Program) {
+	if !tc.config.Enabled {
+		return
+	}
 	for _, stmt := range prog.Statements {
 		tc.CheckStatement(stmt)
 	}
@@ -226,17 +234,7 @@ func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 				msg := fmt.Sprintf("type mismatch: variable %s declared as %s but assigned %s",
 					stmt.Let.Name, annotatedType.String(), exprType.String())
 
-				if tc.config.Strict {
-					tc.Error(msg)
-				} else {
-					// In non-strict mode, allow compatible assignments or issue warnings
-					if tc.canAssign(exprType, annotatedType) {
-						tc.Warning(fmt.Sprintf("implicit type conversion: %s to %s for variable %s",
-							exprType.String(), annotatedType.String(), stmt.Let.Name))
-					} else {
-						tc.Error(msg)
-					}
-				}
+				tc.Error(msg)
 			}
 
 			// Use the annotated type for binding
@@ -270,7 +268,7 @@ func (tc *TypeChecker) CheckExpr(expr *ast.Expr) FluxType {
 
 func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	condType := tc.CheckExpr(ifExpr.Cond)
-	if !TypesEqual(condType, BoolType{}) && !TypesEqual(condType, UnknownType{}) {
+	if !TypesEqual(condType, BoolType{}) && !isUnknown(condType) {
 		msg := fmt.Sprintf("if condition must be bool, got %s", condType.String())
 		if tc.config.Strict {
 			tc.Error(msg)
@@ -282,7 +280,7 @@ func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	thenType := tc.CheckExpr(ifExpr.ThenExpr)
 	elseType := tc.CheckExpr(ifExpr.ElseExpr)
 
-	if !TypesEqual(thenType, elseType) && !TypesEqual(thenType, UnknownType{}) && !TypesEqual(elseType, UnknownType{}) {
+	if !TypesEqual(thenType, elseType) && !isUnknown(thenType) && !isUnknown(elseType) {
 		msg := fmt.Sprintf("if branches must have same type: then=%s, else=%s",
 			thenType.String(), elseType.String())
 
@@ -290,119 +288,62 @@ func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 			tc.Error(msg)
 			return VoidType{}
 		} else {
-			tc.Warning(msg + " (using union type)")
-			// In non-strict mode, return the first non-void type or unknown
-			if !TypesEqual(thenType, VoidType{}) {
-				return thenType
-			}
-			return elseType
+			tc.Warning(msg + " (using unknown type)")
+			return UnknownType{}
 		}
 	}
 
 	return thenType
 }
 
-func (tc *TypeChecker) CheckBinaryExpr(binExpr *ast.Binary) FluxType {
-	leftType := tc.CheckExpr(&ast.Expr{Primary: binExpr.Left})
-
-	if binExpr.Operator == nil || binExpr.Right == nil {
-		return leftType
+func (tc *TypeChecker) CheckBinaryExpr(expr *ast.Binary) FluxType {
+	result := tc.checkAdditive(expr.Left)
+	for _, rest := range expr.Rest {
+		result = tc.checkOperator(rest.Operator, result, tc.checkAdditive(rest.Right))
 	}
+	return result
+}
 
-	rightType := tc.CheckExpr(binExpr.Right)
+func (tc *TypeChecker) checkAdditive(expr *ast.Additive) FluxType {
+	result := tc.CheckPrimaryExpr(expr.Left)
+	for _, rest := range expr.Rest {
+		result = tc.checkOperator(rest.Operator, result, tc.CheckPrimaryExpr(rest.Right))
+	}
+	return result
+}
 
-	switch *binExpr.Operator {
+func (tc *TypeChecker) checkOperator(operator string, left, right FluxType) FluxType {
+	switch operator {
 	case "+":
-		// Allow unknown types for inference
-		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
-			// Try to infer based on the known type
-			if !TypesEqual(leftType, UnknownType{}) {
-				return leftType
-			}
-			if !TypesEqual(rightType, UnknownType{}) {
-				return rightType
-			}
-			return UnknownType{} // Both unknown, return unknown
+		if isUnknown(left) && isUnknown(right) {
+			return UnknownType{}
 		}
-
-		if TypesEqual(leftType, IntType{}) && TypesEqual(rightType, IntType{}) {
+		if TypesEqual(left, IntType{}) && TypesEqual(right, IntType{}) {
 			return IntType{}
 		}
-		if TypesEqual(leftType, StringType{}) && TypesEqual(rightType, StringType{}) {
+		if TypesEqual(left, StringType{}) && TypesEqual(right, StringType{}) {
 			return StringType{}
 		}
-
-		msg := fmt.Sprintf("invalid operands for +: %s and %s", leftType.String(), rightType.String())
-		if tc.config.Strict {
-			tc.Error(msg)
-		} else {
-			// In non-strict mode, be more lenient
-			if (TypesEqual(leftType, IntType{}) || TypesEqual(leftType, StringType{})) &&
-				(TypesEqual(rightType, IntType{}) || TypesEqual(rightType, StringType{})) {
-				tc.Warning(fmt.Sprintf("mixed type addition: %s + %s (converting to string)",
-					leftType.String(), rightType.String()))
-				return StringType{} // Default to string for mixed additions
-			} else {
+	case "-", "<", ">":
+		if TypesEqual(left, IntType{}) && TypesEqual(right, IntType{}) {
+			if operator == "-" {
+				return IntType{}
+			}
+			return BoolType{}
+		}
+	case "==":
+		if !TypesEqual(left, right) {
+			msg := fmt.Sprintf("cannot compare different types: %s and %s", left.String(), right.String())
+			if tc.config.Strict {
 				tc.Error(msg)
+			} else {
+				tc.Warning(msg + " (allowing comparison)")
 			}
 		}
-		return VoidType{}
-	case "-":
-		// Allow unknown types for inference
-		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
-			return IntType{} // Assume int for arithmetic
-		}
-
-		if TypesEqual(leftType, IntType{}) && TypesEqual(rightType, IntType{}) {
-			return IntType{}
-		}
-
-		msg := fmt.Sprintf("invalid operands for -: %s and %s", leftType.String(), rightType.String())
-		if tc.config.Strict {
-			tc.Error(msg)
-		} else {
-			tc.Warning(msg + " (assuming int)")
-			return IntType{}
-		}
-		return VoidType{}
-	case "==":
-		// Allow comparison of unknown types
-		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
-			return BoolType{}
-		}
-
-		if TypesEqual(leftType, rightType) {
-			return BoolType{}
-		}
-
-		msg := fmt.Sprintf("cannot compare different types: %s and %s", leftType.String(), rightType.String())
-		if tc.config.Strict {
-			tc.Error(msg)
-		} else {
-			tc.Warning(msg + " (allowing comparison)")
-		}
 		return BoolType{}
-	case ">", "<":
-		// Allow unknown types for comparison
-		if TypesEqual(leftType, UnknownType{}) || TypesEqual(rightType, UnknownType{}) {
-			return BoolType{}
-		}
-
-		if TypesEqual(leftType, IntType{}) && TypesEqual(rightType, IntType{}) {
-			return BoolType{}
-		}
-
-		msg := fmt.Sprintf("invalid operands for %s: %s and %s", *binExpr.Operator, leftType.String(), rightType.String())
-		if tc.config.Strict {
-			tc.Error(msg)
-		} else {
-			tc.Warning(msg + " (assuming numeric comparison)")
-		}
-		return BoolType{}
-	default:
-		tc.Error(fmt.Sprintf("unknown binary operator: %s", *binExpr.Operator))
-		return VoidType{}
 	}
+	tc.Error(fmt.Sprintf("invalid operands for %s: %s and %s", operator, left.String(), right.String()))
+	return UnknownType{}
 }
 
 func (tc *TypeChecker) CheckBlockExpr(blockExpr *ast.BlockExpr) FluxType {
@@ -436,6 +377,10 @@ func (tc *TypeChecker) CheckPrimaryExpr(primary *ast.PrimaryExpr) FluxType {
 func (tc *TypeChecker) CheckBaseExpr(base *ast.BaseExpr) FluxType {
 	if base.Term != nil {
 		return tc.CheckTerm(base.Term)
+	} else if base.Group != nil {
+		return tc.CheckExpr(base.Group.Expr)
+	} else if base.Block != nil {
+		return tc.CheckBlockExpr(base.Block)
 	} else if base.List != nil {
 		return tc.CheckListExpr(base.List)
 	} else if base.Dict != nil {
@@ -468,7 +413,7 @@ func (tc *TypeChecker) CheckTerm(term *ast.Term) FluxType {
 func (tc *TypeChecker) CheckListExpr(list *ast.ListExpr) FluxType {
 	if len(list.Elems) == 0 {
 		// Empty list - we'll infer the type later or use a generic type
-		return ListType{ElementType: VoidType{}}
+		return ListType{ElementType: UnknownType{}}
 	}
 
 	elemType := tc.CheckExpr(list.Elems[0])
@@ -486,14 +431,16 @@ func (tc *TypeChecker) CheckListExpr(list *ast.ListExpr) FluxType {
 func (tc *TypeChecker) CheckDictExpr(dict *ast.DictExpr) FluxType {
 	if len(dict.Pairs) == 0 {
 		// Empty dictionary
-		return DictType{KeyType: VoidType{}, ValueType: VoidType{}}
+		return DictType{KeyType: UnknownType{}, ValueType: UnknownType{}}
 	}
 
 	keyType := tc.CheckExpr(dict.Pairs[0].Key)
+	tc.checkDictionaryKey(keyType)
 	valueType := tc.CheckExpr(dict.Pairs[0].Value)
 
 	for i, pair := range dict.Pairs[1:] {
 		kt := tc.CheckExpr(pair.Key)
+		tc.checkDictionaryKey(kt)
 		vt := tc.CheckExpr(pair.Value)
 
 		if !TypesEqual(kt, keyType) {
@@ -510,6 +457,12 @@ func (tc *TypeChecker) CheckDictExpr(dict *ast.DictExpr) FluxType {
 }
 
 func (tc *TypeChecker) CheckCallExpr(fnType FluxType, call *ast.CallExpr) FluxType {
+	if isUnknown(fnType) {
+		for _, arg := range call.Args {
+			tc.CheckExpr(arg)
+		}
+		return UnknownType{}
+	}
 	funcType, ok := fnType.(FunctionType)
 	if !ok {
 		tc.Error(fmt.Sprintf("cannot call non-function type: %s", fnType.String()))
@@ -527,7 +480,7 @@ func (tc *TypeChecker) CheckCallExpr(fnType FluxType, call *ast.CallExpr) FluxTy
 		expectedType := funcType.ParamTypes[i]
 
 		// Allow unknown types to be compatible
-		if !TypesEqual(expectedType, UnknownType{}) && !TypesEqual(argType, UnknownType{}) {
+		if !isUnknown(expectedType) && !isUnknown(argType) {
 			if !TypesEqual(argType, expectedType) {
 				tc.Error(fmt.Sprintf("argument %d has type %s, expected %s",
 					i, argType.String(), expectedType.String()))
@@ -542,12 +495,15 @@ func (tc *TypeChecker) CheckIndexExpr(baseType FluxType, index *ast.IndexExpr) F
 	indexType := tc.CheckExpr(index.Index)
 
 	switch bt := baseType.(type) {
+	case UnknownType:
+		return UnknownType{}
 	case ListType:
 		if !TypesEqual(indexType, IntType{}) {
 			tc.Error(fmt.Sprintf("list index must be int, got %s", indexType.String()))
 		}
 		return bt.ElementType
 	case DictType:
+		tc.checkDictionaryKey(indexType)
 		if !TypesEqual(indexType, bt.KeyType) {
 			tc.Error(fmt.Sprintf("dictionary key must be %s, got %s",
 				bt.KeyType.String(), indexType.String()))
@@ -567,7 +523,12 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 
 	// Process parameters with type annotations
 	paramTypes := make([]FluxType, len(funcExpr.Params))
+	seen := map[string]bool{}
 	for i, param := range funcExpr.Params {
+		if seen[param.Name] {
+			tc.Error("duplicate parameter: " + param.Name)
+		}
+		seen[param.Name] = true
 		var paramType FluxType
 
 		if param.TypeAnno != nil {
@@ -600,7 +561,7 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 			returnType = bodyType // use inferred type
 		} else {
 			// Check if body type matches return annotation
-			if !TypesEqual(bodyType, UnknownType{}) && !TypesEqual(bodyType, annotatedReturnType) {
+			if !isUnknown(bodyType) && !TypesEqual(bodyType, annotatedReturnType) {
 				tc.Error(fmt.Sprintf("return type mismatch: declared %s but body returns %s",
 					annotatedReturnType.String(), bodyType.String()))
 			}
@@ -620,23 +581,10 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 	}
 }
 
-// canAssign checks if a value of one type can be assigned to another in non-strict mode
-func (tc *TypeChecker) canAssign(from, to FluxType) bool {
-	if TypesEqual(from, to) {
-		return true
-	}
-
-	// In non-strict mode, allow some implicit conversions
-	switch to.(type) {
-	case UnknownType:
-		return true
-	case IntType:
-		// Allow string to int conversion in non-strict mode (would need runtime parsing)
-		return false // For now, don't allow this
-	case StringType:
-		// Allow most types to string conversion
-		return true
+func (tc *TypeChecker) checkDictionaryKey(t FluxType) {
+	switch t.(type) {
+	case IntType, StringType, BoolType, UnknownType:
 	default:
-		return false
+		tc.Error(fmt.Sprintf("dictionary key must be int, string, or bool, got %s", t.String()))
 	}
 }

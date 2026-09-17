@@ -341,7 +341,7 @@ of nested conditionals plus a closure, and `large` is 300 bindings with a
 | Stage | small | nested | large |
 | --- | --- | --- | --- |
 | Parse | 351 µs | 3.54 ms | 9.22 ms |
-| Type check | 1.21 µs | 1.67 µs | 45.7 µs |
+| Type check | 1.34 µs | 1.85 µs | 43.4 µs |
 | Compile | 1.51 µs | 1.82 µs | 45.0 µs |
 | Interpret | 3.83 µs | 2.50 µs | 48.7 µs |
 | VM | 3.82 µs | 2.74 µs | 27.7 µs |

@@ -225,13 +225,24 @@ roughly a sixth of parse time and a third of parse allocations; see
 
 ### P1.3 — Migrate type diagnostics
 
-- [ ] Replace `errors []string` and `warnings []string` with diagnostic records.
-- [ ] Pass the relevant node/span into each type-checking operation.
-- [ ] Point an argument mismatch at the argument; attach the parameter declaration as
+- [x] Replace `errors []string` and `warnings []string` with diagnostic records.
+      The checker holds a `diagnostic.Bag`.
+- [x] Pass the relevant node/span into each type-checking operation. `checkOperator`,
+      `CheckCallExpr`, `CheckIndexExpr` and `checkDictionaryKey` take spans; the rest
+      reach their node directly.
+- [x] Point an argument mismatch at the argument; attach the parameter declaration as
       related information. Do likewise for annotations and differing branch types.
-- [ ] Apply strict/warn-only policy to severity at one layer while preserving codes and spans.
-- [ ] Keep temporary string accessors only as adapters while migrating existing callers/tests.
-- [ ] Do not introduce new inference behavior in this slice.
+      `FunctionType.Params` carries parameter provenance so the label can be built; it is
+      empty for built-ins and for function types written as annotations, and the label is
+      then omitted rather than guessed.
+- [x] Apply strict/warn-only policy to severity at one layer while preserving codes and spans.
+      `TypeChecker.report` is the only place a mode changes a severity, and
+      `TestModesChangeSeverityAndNothingElse` checks that codes and spans are mode-independent.
+- [x] Keep temporary string accessors only as adapters while migrating existing callers/tests.
+      `GetErrors`/`GetWarnings` render from the bag and now include a position when the
+      checker was given a source.
+- [x] Do not introduce new inference behavior in this slice. The lenient/strict divergence in
+      what a mismatched conditional returns is preserved as-is for Phase 4.
 
 ### P1.4 — Return runtime failures and carry VM source maps
 

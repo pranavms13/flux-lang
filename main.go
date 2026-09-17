@@ -117,7 +117,7 @@ func runCLI(args []string) (err error) {
 		return errors.New(formatDiagnostics(parsed.Source, parsed.Diagnostics))
 	}
 	prog := parsed.Program
-	tc := types.NewTypeCheckerWithConfig(types.TypeCheckingMode{
+	tc := types.NewTypeCheckerForSource(parsed.Source, types.TypeCheckingMode{
 		Strict: cfg.TypeChecking.Strict, WarnOnly: cfg.TypeChecking.WarnOnly, Enabled: cfg.TypeChecking.Enabled,
 	})
 	tc.CheckProgram(prog)

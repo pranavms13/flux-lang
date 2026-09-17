@@ -44,6 +44,12 @@ source -> lexer -> Participle parser -> AST -> optional type checker
 - `types/` maintains nested type environments. `UnknownType` is compatible with
   other types, but must not be used as an equality test for whether a type is
   unknown. Function annotations and concrete collection members are checked.
+  Diagnostics are records, not strings: `NewTypeCheckerForSource` locates them,
+  a mismatch points at the offending construct with the declaration it
+  disagrees with attached, and `report` is the only place strict and warn-only
+  change a severity. `FunctionType.Params` carries where each parameter was
+  written, which is provenance rather than part of the type, so `Equals`
+  ignores it.
 - `runtime/` evaluates AST nodes with a fresh global environment for every run.
   Closures capture enclosing function parameters; globals are resolved at call time.
 - `compiler/` emits opcodes and four-byte unsigned operands. Each expression leaves
@@ -77,6 +83,10 @@ initialization, version metadata, and cleanup of generated source files.
 
 `types/types_test.go` covers strict, lenient, warn-only, and disabled modes;
 `config/config_test.go` covers defaults, partial configuration and persistence.
+
+`types/diagnostics_test.go` checks what each kind of diagnostic points at and
+what it attaches, and that a checking mode changes severity without changing the
+code or the location.
 
 `parser/parser_test.go` checks the span of every kind of construct against the
 text it claims to cover, pins Participle's end-position semantics, and covers

@@ -138,6 +138,21 @@ injected directly. Shrinking this means a pass that rewrites positions into
 `source.Span` after parsing, which is worth doing only if a measurement later
 says it matters.
 
+## What P1.3 cost
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| Type check small | 1.21 µs, 17 allocs | 1.34 µs, 19 allocs |
+| Type check nested | 1.67 µs, 22 allocs | 1.85 µs, 25 allocs |
+| Type check large | 45.7 µs | 43.4 µs |
+
+About 11% on the two function-heavy shapes, from the parameter provenance each
+function literal now records so that an argument mismatch can point back at the
+parameter it disagrees with. Building spans and diagnostics costs nothing on a
+program that checks cleanly, because those paths only run when something is
+wrong. The large shape is flat: it declares 300 bindings and one list, and no
+functions.
+
 ## Still not recorded
 
 No performance budgets are set. Set them against measurements taken after the

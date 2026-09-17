@@ -190,21 +190,38 @@ documented on the field rather than hidden.
 
 ### P1.2 — Preserve positions through parsing
 
-- [ ] Add `ParseSource(filename, text)` or a source-snapshot equivalent; retain `Parse(text)`
-      as a compatibility wrapper for tests and embedded callers.
-- [ ] Populate positions on statements, declarations, annotations, parameters, terms,
-      operators, call arguments, indexes, and composite expressions.
-- [ ] Convert Participle positions at one boundary and verify end-position semantics
-      against the pinned version with token/EOF fixtures.
-- [ ] Extract lexical and syntax failures through their typed errors, not string matching.
-- [ ] Preserve a full file token stream once, including comments/trivia. Avoid copying
-      the entire nested token range into every AST node.
-- [ ] Define the result of a failed parse explicitly: diagnostics and optionally a partial
+- [x] Add `ParseSource(filename, text)` or a source-snapshot equivalent; retain `Parse(text)`
+      as a compatibility wrapper for tests and embedded callers. `parser.ParseSource` takes a
+      `*source.Source`; `parser.Parse` remains, and `main.go` now reports the real filename.
+- [x] Populate positions on statements, declarations, annotations, parameters, terms,
+      operators, call arguments, indexes, and composite expressions. Every node embeds
+      `ast.Node`, which Participle fills through the embedded struct.
+- [x] Convert Participle positions at one boundary and verify end-position semantics
+      against the pinned version with token/EOF fixtures. `ast.Node.Span` is the only
+      conversion; `TestEndPositionSemantics` pins `EndPos` as the exclusive end.
+- [x] Extract lexical and syntax failures through their typed errors, not string matching.
+      `*lexer.Error` and `*participle.UnexpectedTokenError` via `errors.As`. The expected-set
+      text is still recovered from the message, because Participle keeps it unexported.
+- [x] Preserve a full file token stream once, including comments/trivia. Avoid copying
+      the entire nested token range into every AST node. `Tokens` is declared on `ast.Program`
+      alone, and `TestOnlyTheRootCapturesTokens` fails if another node declares one.
+- [x] Define the result of a failed parse explicitly: diagnostics and optionally a partial
       syntax tree for tools; an erroneous tree must never be executed or compiled.
+      `parser.Result.Program` is nil whenever parsing failed; the partial tree is in a
+      separate `Partial` field that nothing executes.
 
 Participle's built-in position/token capture makes a parser replacement unnecessary
 for this step. Its partial-tree behavior still needs a Flux wrapper with a clear
 execution boundary. [Pinned parser documentation](https://raw.githubusercontent.com/alecthomas/participle/v2.1.4/README.md).
+
+Confirmed against the pinned version. Participle injects `Pos`/`EndPos` through an
+embedded struct, sets `EndPos` from the next raw token (so it is the exclusive
+end), and fills a `Tokens` field from that node's whole raw range, including
+elided tokens. The stream stops at the last consumed token; whatever follows is
+trivia by definition and is recovered from the source snapshot, so
+`parser.Result.TrailingTrivia` needs no second lexing pass. Positions cost
+roughly a sixth of parse time and a third of parse allocations; see
+[docs/BASELINE.md](BASELINE.md).
 
 ### P1.3 — Migrate type diagnostics
 

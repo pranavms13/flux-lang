@@ -29,9 +29,18 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   missing Go toolchain. Neither package imports anything else in the module, so
   the standalone build bundle can include them beside the VM.
 - `ast/` defines the parser grammar. Addition/subtraction bind more tightly than
-  comparisons; operators within each level associate left to right.
-- `parser/` configures Participle and returns the AST. Braces can represent a
-  dictionary or an expression block; `{}` is an empty dictionary.
+  comparisons; operators within each level associate left to right. Every node
+  embeds `ast.Node`, which Participle fills with the node's start and end
+  positions; `Span` converts that pair into a `source.Span`, and returns
+  `NoSpan` for a node built by hand rather than parsed.
+- `parser/` configures Participle and returns a `Result`. `ParseSource` takes a
+  source snapshot and reports failures as diagnostics located in it; `Parse`
+  remains for callers that only have text. A failed parse leaves `Program` nil
+  and puts the recoverable tree in `Partial`, which must never be executed. The
+  full token stream, comments and whitespace included, is captured once on
+  `ast.Program`; text after its `EndPos` is trivia and comes from the snapshot.
+  Braces can represent a dictionary or an expression block; `{}` is an empty
+  dictionary.
 - `types/` maintains nested type environments. `UnknownType` is compatible with
   other types, but must not be used as an equality test for whether a type is
   unknown. Function annotations and concrete collection members are checked.
@@ -68,6 +77,12 @@ initialization, version metadata, and cleanup of generated source files.
 
 `types/types_test.go` covers strict, lenient, warn-only, and disabled modes;
 `config/config_test.go` covers defaults, partial configuration and persistence.
+
+`parser/parser_test.go` checks the span of every kind of construct against the
+text it claims to cover, pins Participle's end-position semantics, and covers
+lexical, syntax, and end-of-input failures. `TestOnlyTheRootCapturesTokens` fails
+if a node other than `Program` declares a `Tokens` field, which would copy each
+subtree's tokens once per level of nesting.
 
 `source/source_test.go` covers tabs, CRLF, empty files, EOF, multiline spans,
 combining marks, and supplementary-plane characters; `diagnostic/diagnostic_test.go`

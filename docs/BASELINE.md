@@ -108,7 +108,37 @@ make the curve worse, and fixture programs must stay shallow.
 Both execution backends perform within a few percent of each other on all three
 shapes, which is the parity Phase 1 must preserve while adding source maps.
 
+## What P1.2 cost
+
+Re-measured after source positions landed, on the same machine. Every AST node
+now embeds two `lexer.Position` values, which Participle fills as it builds the
+tree.
+
+| Benchmark | Before | After | Change |
+| --- | --- | --- | --- |
+| Parse small | 298 µs, 259 KB | 351 µs, 354 KB | +18% time, +37% memory |
+| Parse nested | 2.64 ms, 3.5 MB | 3.54 ms, 5.0 MB | +34% time, +43% memory |
+| Parse large | 8.01 ms, 5.0 MB | 9.22 ms, 6.7 MB | +15% time, +34% memory |
+| Type check large | 34.9 µs | 45.7 µs | +31% |
+| Compile large | 31.4 µs | 45.0 µs | +43% |
+| Interpret large | 36.9 µs | 48.7 µs | +32% |
+| VM large | 27.4 µs | 27.7 µs | unchanged |
+
+The parser regression is the price of the positions themselves. The regressions
+in the checker, the compiler, and the interpreter are a consequence rather than
+a second cost: each node grew by two positions, so walking the same tree touches
+more memory. The VM is unchanged, which corroborates that reading — it executes
+bytecode and never walks the AST.
+
+Most of the per-node cost is the `Filename` string that `lexer.Position` carries
+twice on every node, duplicating one value the source snapshot already holds.
+Participle requires a field its `lexer.Position` converts to, and Go struct
+conversion needs identical underlying types, so a compact position cannot be
+injected directly. Shrinking this means a pass that rewrites positions into
+`source.Span` after parsing, which is worth doing only if a measurement later
+says it matters.
+
 ## Still not recorded
 
-No performance budgets are set. Re-measure after the source-position prototype,
-as the plan requires, and set budgets against those numbers rather than these.
+No performance budgets are set. Set them against measurements taken after the
+runtime work in P1.4, not against either column above.

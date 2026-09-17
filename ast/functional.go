@@ -2,12 +2,14 @@ package ast
 
 // Enhanced function parameter with optional type annotation
 type FuncParam struct {
+	Node
 	Name     string    `parser:"@Ident"`
 	TypeAnno *TypeAnno `parser:"@@?"`
 }
 
 // Enhanced function expression with type annotations
 type FuncExpr struct {
+	Node
 	Fn         string       `parser:"'fn'"`
 	LParen     string       `parser:"'('"`
 	Params     []*FuncParam `parser:"(@@ (',' @@)*)?"`

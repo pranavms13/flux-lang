@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,8 +17,10 @@ import (
 
 	"github.com/pranavms13/flux-lang/compiler"
 	"github.com/pranavms13/flux-lang/config"
+	"github.com/pranavms13/flux-lang/diagnostic"
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
+	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/types"
 	"github.com/pranavms13/flux-lang/vm"
 )
@@ -105,14 +108,15 @@ func runCLI(args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	source, err := os.ReadFile(args[1])
+	text, err := os.ReadFile(args[1])
 	if err != nil {
-		return err
+		return diagnostic.Tool("read source file", args[1], err)
 	}
-	prog, err := parser.Parse(string(source))
-	if err != nil {
-		return fmt.Errorf("%s: %w", args[1], err)
+	parsed := parser.ParseSource(source.NewMap().Add(args[1], string(text)))
+	if parsed.Failed() {
+		return errors.New(formatDiagnostics(parsed.Source, parsed.Diagnostics))
 	}
+	prog := parsed.Program
 	tc := types.NewTypeCheckerWithConfig(types.TypeCheckingMode{
 		Strict: cfg.TypeChecking.Strict, WarnOnly: cfg.TypeChecking.WarnOnly, Enabled: cfg.TypeChecking.Enabled,
 	})
@@ -181,6 +185,24 @@ func compileExecutable(chunk *vm.Chunk, sourcePath string) (string, error) {
 		return "", fmt.Errorf("build executable (Go must be installed): %w\n%s", err, result)
 	}
 	return output, nil
+}
+
+// formatDiagnostics renders diagnostics as one line each, with their notes.
+// It is a stopgap: P1.6 adds the real renderer, with source snippets, related
+// locations, optional colour, and a JSON representation, and the checker and
+// both engines report through it too.
+func formatDiagnostics(src *source.Source, diagnostics []diagnostic.Diagnostic) string {
+	rendered := make([]string, 0, len(diagnostics))
+	for _, d := range diagnostics {
+		position := src.Position(d.Primary.Start)
+		line := fmt.Sprintf("%s:%d:%d: %s[%s]: %s",
+			src.Name(), position.Line, position.Display, d.Severity, d.Code, d.Message)
+		for _, note := range d.Notes {
+			line += "\n  = note: " + note
+		}
+		rendered = append(rendered, line)
+	}
+	return strings.Join(rendered, "\n")
 }
 
 func printUsage() {

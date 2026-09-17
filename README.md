@@ -340,16 +340,16 @@ of nested conditionals plus a closure, and `large` is 300 bindings with a
 
 | Stage | small | nested | large |
 | --- | --- | --- | --- |
-| Parse | 298 µs | 2.64 ms | 8.01 ms |
-| Type check | 1.23 µs | 1.75 µs | 34.9 µs |
-| Compile | 1.49 µs | 1.82 µs | 31.4 µs |
-| Interpret | 3.82 µs | 2.50 µs | 36.9 µs |
-| VM | 3.81 µs | 2.66 µs | 27.4 µs |
+| Parse | 351 µs | 3.54 ms | 9.22 ms |
+| Type check | 1.21 µs | 1.67 µs | 45.7 µs |
+| Compile | 1.51 µs | 1.82 µs | 45.0 µs |
+| Interpret | 3.83 µs | 2.50 µs | 48.7 µs |
+| VM | 3.82 µs | 2.74 µs | 27.7 µs |
 
 Two things are worth knowing before you read too much into these.
 
 **Parsing dominates.** It costs two to three orders of magnitude more than every
-other stage combined: parsing a 270-byte script takes 298 µs, checking it takes
+other stage combined: parsing a 270-byte script takes 351 µs, checking it takes
 1.2 µs, and running it takes under 4 µs. If a Flux program feels slow to start,
 the parser is why.
 
@@ -359,10 +359,10 @@ roughly 1.8x:
 
 | Nesting depth | 2 | 4 | 6 | 8 |
 | --- | --- | --- | --- | --- |
-| Parse | 278 µs | 772 µs | 2.64 ms | 9.98 ms |
+| Parse | 338 µs | 998 µs | 3.53 ms | 13.5 ms |
 
 It does not level off. Sixteen nested conditionals make a 450-byte program that
-takes over two seconds to parse. Grouped expressions and long operator chains are
+takes several seconds to parse. Grouped expressions and long operator chains are
 unaffected — the cost is specific to nesting `if ... then ... else` inside itself.
 Keep conditionals shallow for now; this is a grammar problem, and fixing it is
 [planned work](docs/PLAN.md).

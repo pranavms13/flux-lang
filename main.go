@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	_ "embed"
+	"embed"
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/pranavms13/flux-lang/compiler"
 	"github.com/pranavms13/flux-lang/config"
 	"github.com/pranavms13/flux-lang/diagnostic"
+	"github.com/pranavms13/flux-lang/fault"
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
 	"github.com/pranavms13/flux-lang/source"
@@ -32,35 +34,59 @@ var (
 	Date    = "unknown"
 )
 
-// Embedding the VM makes compilation independent of the Flux source checkout.
+// bundledPackages are the packages a generated executable is built from.
 //
-//go:embed vm/vm.go
-var vmSource string
+// The list is explicit rather than derived from the VM's imports, so that
+// adding an import the bundle does not contain fails TestBuildBundleIsClosed
+// here rather than a user's build on their machine. Every package in it must
+// depend only on the standard library and on other members of the bundle.
+var bundledPackages = []string{"diagnostic", "fault", "source", "vm"}
+
+// Embedding those packages makes compilation independent of the Flux source
+// checkout. Test files are excluded when the bundle is written out; the embed
+// patterns cannot express that.
+//
+//go:embed diagnostic/*.go fault/*.go source/*.go vm/*.go
+var bundleFS embed.FS
 
 func init() { gob.RegisterName("flux.Chunk", &vm.Chunk{}) }
 
 const executableTemplate = `package main
 
 import (
- "bytes"
- "encoding/base64"
- "encoding/gob"
- "fmt"
- "os"
+	"bytes"
+	"encoding/base64"
+	"encoding/gob"
+	"fmt"
+	"os"
+
+	"github.com/pranavms13/flux-lang/fault"
+	"github.com/pranavms13/flux-lang/vm"
 )
 
-func init() { gob.RegisterName("flux.Chunk", &Chunk{}) }
+func init() { gob.RegisterName("flux.Chunk", &vm.Chunk{}) }
 
 func main() {
- defer func() {
-  if err := recover(); err != nil { fmt.Fprintln(os.Stderr, "Runtime error:", err); os.Exit(1) }
- }()
- bytecode, err := base64.StdEncoding.DecodeString("{{.Bytecode}}")
- if err != nil { panic(err) }
- var chunk Chunk
- if err := gob.NewDecoder(bytes.NewReader(bytecode)).Decode(&chunk); err != nil { panic(err) }
- New(&chunk).Run()
+	bytecode, err := base64.StdEncoding.DecodeString("{{.Bytecode}}")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: unreadable embedded program:", err)
+		os.Exit(2)
+	}
+	var chunk vm.Chunk
+	if err := gob.NewDecoder(bytes.NewReader(bytecode)).Decode(&chunk); err != nil {
+		fmt.Fprintln(os.Stderr, "error: unreadable embedded program:", err)
+		os.Exit(2)
+	}
+	if err := vm.New(&chunk).Run(); err != nil {
+		fmt.Fprintln(os.Stderr, fault.Report(err))
+		os.Exit(1)
+	}
 }
+`
+
+const bundleGoMod = `module github.com/pranavms13/flux-lang
+
+go 1.23.2
 `
 
 func main() {
@@ -71,10 +97,16 @@ func main() {
 }
 
 func runCLI(args []string) (err error) {
-	// Runtime errors are reported as diagnostics instead of Go stack traces.
+	// Both engines return their failures, so nothing a program does should
+	// reach this. Anything that does is a defect in Flux, and is reported as
+	// one: presenting it as a mistake in the user's program would send them
+	// looking for a bug that is not theirs.
 	defer func() {
 		if failure := recover(); failure != nil {
-			err = fmt.Errorf("%v", failure)
+			err = errors.New(fault.Report(&fault.Error{
+				Code:    diagnostic.CodeInternal,
+				Message: fmt.Sprintf("unrecovered panic: %v", failure),
+			}))
 		}
 	}()
 	if len(args) == 0 {
@@ -131,10 +163,13 @@ func runCLI(args []string) (err error) {
 		return fmt.Errorf("type checking failed:\n  - %s", strings.Join(tc.GetErrors(), "\n  - "))
 	}
 	if args[0] == "run" {
-		runtime.Run(prog)
+		if failure := runtime.Run(prog, runtime.Options{Output: os.Stdout, Source: parsed.Source}); failure != nil {
+			return errors.New(fault.Report(failure))
+		}
 		return nil
 	}
-	output, err := compileExecutable(compiler.NewFluxCompiler().Compile(prog), args[1])
+	chunk := compiler.NewFluxCompilerForSource(parsed.Source).Compile(prog)
+	output, err := compileExecutable(chunk, args[1])
 	if err != nil {
 		return err
 	}
@@ -163,8 +198,7 @@ func compileExecutable(chunk *vm.Chunk, sourcePath string) (string, error) {
 	if err := os.WriteFile(filepath.Join(tempDir, "main.go"), generated.Bytes(), 0600); err != nil {
 		return "", err
 	}
-	standaloneVM := strings.Replace(vmSource, "package vm", "package main", 1)
-	if err := os.WriteFile(filepath.Join(tempDir, "vm.go"), []byte(standaloneVM), 0600); err != nil {
+	if err := writeBundle(tempDir); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll("dist", 0755); err != nil {
@@ -179,8 +213,13 @@ func compileExecutable(chunk *vm.Chunk, sourcePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.Command("go", "build", "-o", absoluteOutput, "main.go", "vm.go")
+	cmd := exec.Command("go", "build", "-o", absoluteOutput, ".")
 	cmd.Dir = tempDir
+	// The bundle is a self-contained module with no external requirements.
+	// Workspace discovery is disabled so a go.work above the temporary
+	// directory cannot redirect its packages, and the proxy is disabled so a
+	// missing member of the bundle fails here rather than being downloaded.
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod", "GOPROXY=off")
 	if result, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("build executable (Go must be installed): %w\n%s", err, result)
 	}
@@ -203,6 +242,41 @@ func formatDiagnostics(src *source.Source, diagnostics []diagnostic.Diagnostic) 
 		rendered = append(rendered, line)
 	}
 	return strings.Join(rendered, "\n")
+}
+
+// writeBundle materializes the bundled packages under the module path they
+// import each other by, alongside a minimal go.mod. The generated program then
+// imports the VM the ordinary way, instead of the VM's source being rewritten
+// into the main package, which only ever worked while the VM imported nothing.
+func writeBundle(dir string) error {
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(bundleGoMod), 0600); err != nil {
+		return err
+	}
+	for _, pkg := range bundledPackages {
+		entries, err := bundleFS.ReadDir(pkg)
+		if err != nil {
+			return fmt.Errorf("bundle package %s: %w", pkg, err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, pkg), 0755); err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			// Tests are not part of a program; embedding them would drag in
+			// testing-only imports that the bundle does not contain.
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			contents, err := bundleFS.ReadFile(path.Join(pkg, name))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(dir, pkg, name), contents, 0600); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func printUsage() {

@@ -50,16 +50,32 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   change a severity. `FunctionType.Params` carries where each parameter was
   written, which is provenance rather than part of the type, so `Equals`
   ignores it.
+- `fault/` is the catalogue of failures a program can produce while it runs.
+  Both engines report through it, so a failure has one code and one wording
+  whichever engine noticed it, and `fault.Report` renders it for a terminal —
+  including in a generated executable, which has no CLI to do it.
 - `runtime/` evaluates AST nodes with a fresh global environment for every run.
   Closures capture enclosing function parameters; globals are resolved at call time.
+  `Run` returns failures rather than panicking and takes its output writer
+  through `Options`, so a test reads what a program printed without replacing a
+  global.
 - `compiler/` emits opcodes and four-byte unsigned operands. Each expression leaves
   exactly one value, including `nil` for void. Blocks discard intermediate results
-  and conditional jumps consume their condition.
+  and conditional jumps consume their condition. `NewFluxCompilerForSource` records
+  a source map on every chunk, keyed by each instruction's own start offset and
+  already resolved to file, line and column, so a built executable can still
+  report a position once its source is gone.
 - `vm/` executes bytecode with separate local and global environments. Calls create
-  another VM frame and preserve captured locals.
-- `main.go` provides the CLI. Compilation embeds the current VM source alongside
-  serialized bytecode in a temporary build directory, then invokes Go. Generated
-  programs need neither the Flux checkout nor Go at runtime.
+  another VM frame and preserve captured locals. `Run` returns failures; the
+  instruction offset is captured before operands are read, so a failure names the
+  operation that failed rather than the next one. A stack shortfall is reported as
+  an internal defect, because only a compiler bug can cause one.
+- `main.go` provides the CLI. Compilation writes the packages listed in
+  `bundledPackages` into a temporary module alongside the generated program, then
+  invokes Go with `GOWORK=off` and `GOPROXY=off`. Every bundled package depends
+  only on the standard library and on other members of the bundle, which
+  `TestBuildBundleIsClosed` enforces. Generated programs need neither the Flux
+  checkout nor Go at runtime.
 - `config/` loads `flux.json` from the working directory, overlaying defaults.
 - `vsce/` contributes syntax highlighting and bracket/comment configuration; it
   has no language server or snippets.
@@ -72,7 +88,10 @@ make test-coverage
 make build-all
 ```
 
-`execution_test.go` checks the same programs against the interpreter and VM,
+`execution_test.go` checks that both engines agree on a failure's code, message
+and location, not merely that both refuse to finish, and that a failure inside a
+function carries the call sites that led there. It checks the same programs
+against the interpreter and VM,
 including all runnable examples, false booleans, operator precedence, escaped
 strings, nested calls/blocks, closure capture, dictionary order, empty collections,
 large bytecode operands, and runtime failures.

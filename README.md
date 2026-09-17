@@ -334,23 +334,23 @@ make build-all
 
 Reference numbers from `make bench` on an Apple M3 Pro (darwin/arm64, Go 1.25.1).
 They describe one machine at one commit, so treat them as a shape rather than a
-specification. `small` is an ordinary seven-line script, `nested` is six levels
+specification — the same machine varies by up to 30% between sessions. `small` is an ordinary seven-line script, `nested` is six levels
 of nested conditionals plus a closure, and `large` is 300 bindings with a
 300-element list.
 
 | Stage | small | nested | large |
 | --- | --- | --- | --- |
-| Parse | 351 µs | 3.54 ms | 9.22 ms |
-| Type check | 1.34 µs | 1.85 µs | 43.4 µs |
-| Compile | 1.51 µs | 1.82 µs | 45.0 µs |
-| Interpret | 3.83 µs | 2.50 µs | 48.7 µs |
-| VM | 3.82 µs | 2.74 µs | 27.7 µs |
+| Parse | 254 µs | 2.49 ms | 6.40 ms |
+| Type check | 0.92 µs | 1.28 µs | 31.9 µs |
+| Compile | 1.21 µs | 1.41 µs | 36.2 µs |
+| Interpret | 0.92 µs | 0.87 µs | 31.2 µs |
+| VM | 1.14 µs | 1.19 µs | 24.1 µs |
 
 Two things are worth knowing before you read too much into these.
 
 **Parsing dominates.** It costs two to three orders of magnitude more than every
-other stage combined: parsing a 270-byte script takes 351 µs, checking it takes
-1.2 µs, and running it takes under 4 µs. If a Flux program feels slow to start,
+other stage combined: parsing a 270-byte script takes 254 µs, checking it takes
+under 1 µs, and running it takes about the same. If a Flux program feels slow to start,
 the parser is why.
 
 **Nested conditionals parse in exponential time.** The parser uses unbounded
@@ -359,7 +359,7 @@ roughly 1.8x:
 
 | Nesting depth | 2 | 4 | 6 | 8 |
 | --- | --- | --- | --- | --- |
-| Parse | 338 µs | 998 µs | 3.53 ms | 13.5 ms |
+| Parse | 244 µs | 710 µs | 2.48 ms | 9.64 ms |
 
 It does not level off. Sixteen nested conditionals make a 450-byte program that
 takes several seconds to parse. Grouped expressions and long operator chains are

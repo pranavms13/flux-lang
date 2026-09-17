@@ -246,33 +246,49 @@ roughly a sixth of parse time and a third of parse allocations; see
 
 ### P1.4 — Return runtime failures and carry VM source maps
 
-- [ ] Change interpreter evaluation and VM execution to return explicit errors/results.
-- [ ] Replace ordinary language panics and unchecked assertions with validated operations.
-- [ ] Handle wrong arity, invalid operand types, missing keys, bad indexes, non-callables,
-      and undefined values through the same runtime error catalogue.
-- [ ] Represent call traces as data containing function labels and call-site locations.
-- [ ] Add a source map keyed by instruction-start byte offset to every compiled chunk,
-      including nested function chunks.
-- [ ] Capture the instruction start before reading operands, so failures point at the
+- [x] Change interpreter evaluation and VM execution to return explicit errors/results.
+      `runtime.Run` returns an error; `vm.Run` returns an error.
+- [x] Replace ordinary language panics and unchecked assertions with validated operations.
+      The VM's `need` checks stack depth before an instruction consumes it, and constant
+      indexes and types are validated; a shortfall is an internal defect, not a user error.
+- [x] Handle wrong arity, invalid operand types, missing keys, bad indexes, non-callables,
+      and undefined values through the same runtime error catalogue. `fault/`, imported by
+      both engines, so the two cannot drift apart on wording or codes.
+- [x] Represent call traces as data containing function labels and call-site locations.
+      `fault.Frame`, added as the failure unwinds so the innermost frame comes first.
+- [x] Add a source map keyed by instruction-start byte offset to every compiled chunk,
+      including nested function chunks. `vm.Chunk.Locations`; a nested function gets its
+      own map, so a failure inside it reports its own line rather than the call's.
+- [x] Capture the instruction start before reading operands, so failures point at the
       failing operation instead of a subsequent instruction.
-- [ ] Preserve function identity/location metadata when constructing closures.
-- [ ] Keep unexpected implementation failures distinguishable from expected user errors;
-      CLI recovery must not disguise an internal defect as a type mismatch.
-- [ ] Inject an `io.Writer` through execution options. Replace global `os.Stdout` swapping
+- [x] Preserve function identity/location metadata when constructing closures. A chunk
+      carries the name the function was bound to; a closure keeps its chunk.
+- [x] Keep unexpected implementation failures distinguishable from expected user errors;
+      CLI recovery must not disguise an internal defect as a type mismatch. Internal
+      failures carry `X_INTERNAL`, and the CLI's recover now reports a panic as a Flux bug.
+- [x] Inject an `io.Writer` through execution options. Replace global `os.Stdout` swapping
       in new tests and progressively migrate `internal/testutil/output.go` callers.
+      Every caller was migrated, so `internal/testutil` is removed rather than left dead.
 
 ### P1.5 — Preserve standalone builds while sharing diagnostics
 
 Adding a `diagnostic` import to `vm/vm.go` would break today's single-file packaging.
 Resolve that dependency before merging the runtime API change.
 
-- [ ] Replace package-name string rewriting with a small embedded source bundle containing
-      the VM and its explicitly listed runtime-only dependencies.
-- [ ] Materialize those packages and a minimal temporary `go.mod` under the same module
+Done ahead of schedule, because P1.4 could not land without it: the runtime API
+change required the VM to import `fault`, and the old packaging only worked while
+the VM imported nothing.
+
+- [x] Replace package-name string rewriting with a small embedded source bundle containing
+      the VM and its explicitly listed runtime-only dependencies. `bundledPackages` in
+      `main.go` lists `diagnostic`, `fault`, `source`, `vm`.
+- [x] Materialize those packages and a minimal temporary `go.mod` under the same module
       path; generate a main package that imports the bundled VM normally.
-- [ ] Exclude tests, parser/compiler sources, local workspace replacements, and accidental
+- [x] Exclude tests, parser/compiler sources, local workspace replacements, and accidental
       dependencies from the bundle. Keep bundle membership explicit and tested.
-- [ ] Build with workspace discovery disabled; verify dependency resolution with
+      `TestBuildBundleIsClosed` parses every bundled file's imports and rejects one that
+      names a package outside the bundle or any external module.
+- [x] Build with workspace discovery disabled; verify dependency resolution with
       `GOWORK=off` and `GOPROXY=off` using an already installed Go toolchain.
 - [ ] Give serialized chunks a format version and a deliberate gob registration scheme.
 - [ ] Store display filenames and precomputed line/column locations needed after the

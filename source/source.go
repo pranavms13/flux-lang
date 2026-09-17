@@ -14,6 +14,7 @@
 package source
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"unicode/utf16"
@@ -344,4 +345,52 @@ func (m *Map) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.sources)
+}
+
+// Location is a position resolved for display, which no longer needs the source
+// it came from.
+//
+// A generated executable is the reason this type exists. It carries its source
+// map inside the binary and must still report main.flux:4:5 after the .flux
+// file it was built from has been deleted or moved, so the filename, line, and
+// column are resolved when the program is compiled rather than when it fails.
+// The byte range is kept as well, for a tool that does still have the source
+// and wants to show a snippet.
+type Location struct {
+	// File is the display filename, never an absolute build-machine path.
+	File string
+	// Line is 1-based.
+	Line int
+	// Column is the 1-based display column, with tabs already expanded.
+	Column int
+	// Start and End are the half-open byte range within File.
+	Start, End int
+}
+
+// IsValid reports whether the location identifies a place.
+func (l Location) IsValid() bool { return l.File != "" && l.Line > 0 }
+
+// String renders the location as file:line:column.
+func (l Location) String() string {
+	if !l.IsValid() {
+		return "<unknown>"
+	}
+	return fmt.Sprintf("%s:%d:%d", l.File, l.Line, l.Column)
+}
+
+// Locate resolves a span in this source into a Location. It returns the zero
+// Location for a span belonging to another source, rather than a position that
+// would point into the wrong file.
+func (s *Source) Locate(span Span) Location {
+	if span.SourceID != s.id {
+		return Location{}
+	}
+	position := s.Position(span.Start)
+	return Location{
+		File:   s.name,
+		Line:   position.Line,
+		Column: position.Display,
+		Start:  s.clamp(span.Start),
+		End:    s.clamp(span.End),
+	}
 }

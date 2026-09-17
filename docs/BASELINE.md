@@ -110,25 +110,27 @@ shapes, which is the parity Phase 1 must preserve while adding source maps.
 
 ## What P1.2 cost
 
-Re-measured after source positions landed, on the same machine. Every AST node
-now embeds two `lexer.Position` values, which Participle fills as it builds the
-tree.
+Every AST node embeds two `lexer.Position` values, which Participle fills as it
+builds the tree.
+
+Measured by running the parse benchmarks in the pre-P1.2 checkout and in the
+current one, alternately, in the same session. An earlier attempt compared
+numbers taken hours apart and attributed a machine difference to the change: on
+this machine a benchmark set run cold is roughly 30% faster than the same set
+run after a long suite. Only the ratios below survived that correction; the
+absolute figures it published were inflated, and the tables here and in the
+README now carry consistently measured ones.
 
 | Benchmark | Before | After | Change |
 | --- | --- | --- | --- |
-| Parse small | 298 µs, 259 KB | 351 µs, 354 KB | +18% time, +37% memory |
-| Parse nested | 2.64 ms, 3.5 MB | 3.54 ms, 5.0 MB | +34% time, +43% memory |
-| Parse large | 8.01 ms, 5.0 MB | 9.22 ms, 6.7 MB | +15% time, +34% memory |
-| Type check large | 34.9 µs | 45.7 µs | +31% |
-| Compile large | 31.4 µs | 45.0 µs | +43% |
-| Interpret large | 36.9 µs | 48.7 µs | +32% |
-| VM large | 27.4 µs | 27.7 µs | unchanged |
+| Parse small | 207 µs, 259 KB | 250 µs, 354 KB | +21% time, +37% memory |
+| Parse nested | 1.91 ms, 3.5 MB | 2.59 ms, 5.0 MB | +35% time, +43% memory |
+| Parse large | 5.56 ms, 5.0 MB | 6.58 ms, 6.7 MB | +18% time, +33% memory |
 
-The parser regression is the price of the positions themselves. The regressions
-in the checker, the compiler, and the interpreter are a consequence rather than
-a second cost: each node grew by two positions, so walking the same tree touches
-more memory. The VM is unchanged, which corroborates that reading — it executes
-bytecode and never walks the AST.
+The checker, the compiler and the interpreter slowed on large programs too,
+which is a consequence rather than a second cost: each node grew by two
+positions, so walking the same tree touches more memory. The VM is unaffected,
+which corroborates that reading — it executes bytecode and never walks the AST.
 
 Most of the per-node cost is the `Filename` string that `lexer.Position` carries
 twice on every node, duplicating one value the source snapshot already holds.
@@ -153,7 +155,47 @@ program that checks cleanly, because those paths only run when something is
 wrong. The large shape is flat: it declares 300 bindings and one list, and no
 functions.
 
+## What P1.4 cost
+
+Both engines now return failures instead of raising them, which threads an error
+return through every evaluation step, and the VM validates its stack before each
+instruction consumes it.
+
+Measured against the pre-P1.4 checkout with both writing to the same
+destination, because the benchmark harness changed in the same slice: execution
+benchmarks used to point `os.Stdout` at the null device and now write to
+`io.Discard`, so the published execution figures below are not comparable to
+earlier ones. They measure evaluation where the old ones also measured a write
+syscall per line printed.
+
+| Benchmark | Before | After | Change |
+| --- | --- | --- | --- |
+| Interpret small | 2.74 µs | 2.55 µs | −7% |
+| Interpret nested | 1.74 µs | 1.71 µs | unchanged |
+| Interpret large | 25.7 µs | 32.6 µs | +27% |
+| VM small | 2.69 µs | 2.76 µs | +2% |
+| VM nested | 1.85 µs | 2.10 µs | +14% |
+| VM large | 19.5 µs | 23.1 µs | +19% |
+
+Instruction-heavy programs pay 15-25%; the small and nested shapes are flat. The
+interpreter got slightly faster on small programs because evaluating an operand
+no longer allocates a synthetic `ast.Expr` to wrap it — the old code built one
+per operand, which also threw the operand's position away.
+
+## Current figures
+
+One run, all five stages, for reference. `make bench` reproduces them.
+
+| Stage | small | nested | large |
+| --- | --- | --- | --- |
+| Parse | 254 µs | 2.49 ms | 6.40 ms |
+| Type check | 0.92 µs | 1.28 µs | 31.9 µs |
+| Compile | 1.21 µs | 1.41 µs | 36.2 µs |
+| Interpret | 0.92 µs | 0.87 µs | 31.2 µs |
+| VM | 1.14 µs | 1.19 µs | 24.1 µs |
+
 ## Still not recorded
 
-No performance budgets are set. Set them against measurements taken after the
-runtime work in P1.4, not against either column above.
+No performance budgets are set. Set them against measurements taken after P1.6,
+and take the before and after in one session: this machine varies enough between
+sessions to invent a regression that is not there.

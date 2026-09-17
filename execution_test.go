@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/pranavms13/flux-lang/compiler"
-	"github.com/pranavms13/flux-lang/internal/testutil"
+	"github.com/pranavms13/flux-lang/diagnostic"
+	"github.com/pranavms13/flux-lang/fault"
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
+	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/types"
 	"github.com/pranavms13/flux-lang/vm"
 )
@@ -37,36 +40,48 @@ func TestExecutionParity(t *testing.T) {
 	}
 }
 
-func assertExecution(t *testing.T, source, want string) {
+func assertExecution(t *testing.T, text, want string) {
 	t.Helper()
-	prog, err := parser.Parse(source)
-	if err != nil {
-		t.Fatal(err)
+	result := parser.ParseSource(source.New(1, "parity.flux", text))
+	if result.Failed() {
+		t.Fatalf("parse: %v", result.Diagnostics)
 	}
-	tc := types.NewTypeChecker()
-	tc.CheckProgram(prog)
-	if tc.HasErrors() {
-		t.Fatalf("type errors: %v", tc.GetErrors())
+	checker := types.NewTypeCheckerForSource(result.Source, types.TypeCheckingMode{Enabled: true})
+	checker.CheckProgram(result.Program)
+	if checker.HasErrors() {
+		t.Fatalf("type errors: %v", checker.GetErrors())
 	}
-	for _, backend := range []string{"interpreter", "vm"} {
-		t.Run(backend, func(t *testing.T) {
-			defer func() {
-				if err := recover(); err != nil {
-					t.Errorf("execution panicked: %v", err)
-				}
-			}()
-			got := testutil.CaptureOutput(t, func() {
-				if backend == "interpreter" {
-					runtime.Run(prog)
-				} else {
-					vm.New(compiler.NewFluxCompiler().Compile(prog)).Run()
-				}
-			})
+	for _, backend := range backends {
+		t.Run(backend.name, func(t *testing.T) {
+			got, err := backend.run(result)
+			if err != nil {
+				t.Fatalf("execution failed: %v", err)
+			}
 			if got != want {
 				t.Errorf("output = %q, want %q", got, want)
 			}
 		})
 	}
+}
+
+// backends runs the same program through both engines. Output is captured
+// through an injected writer, so these tests no longer depend on replacing
+// os.Stdout and can run alongside anything else.
+var backends = []struct {
+	name string
+	run  func(result parser.Result) (string, error)
+}{
+	{"interpreter", func(result parser.Result) (string, error) {
+		var out bytes.Buffer
+		err := runtime.Run(result.Program, runtime.Options{Output: &out, Source: result.Source})
+		return out.String(), err
+	}},
+	{"vm", func(result parser.Result) (string, error) {
+		var out bytes.Buffer
+		chunk := compiler.NewFluxCompilerForSource(result.Source).Compile(result.Program)
+		err := vm.NewWithOutput(chunk, &out).Run()
+		return out.String(), err
+	}},
 }
 
 func TestLargePrograms(t *testing.T) {
@@ -101,37 +116,99 @@ func TestLargePrograms(t *testing.T) {
 // internal/fixtures. It replaced a table here that listed four example names and
 // their expected output, and could not say what the other examples were for.
 
+// TestRuntimeFailures checks the Phase 1 criterion that both backends agree on
+// what went wrong and where, not merely that both refused to finish.
 func TestRuntimeFailures(t *testing.T) {
-	for _, source := range []string{
-		`let f = fn(x) => x f()`,
-		`let f = fn(x) => x f(1, 2)`,
-		`print()`,
-		`print(1, 2)`,
-		`let xs = [1] print(xs[2])`,
-		`let xs = [1] print(xs[0 - 1])`,
-		`let xs = [1] print(xs["wrong"])`,
-		`let d = {"a": 1} print(d["missing"])`,
-		`print(1 + "wrong")`,
-		`print(missing)`,
-		`let f = "print" f(1)`,
+	for _, test := range []struct {
+		source string
+		code   diagnostic.Code
+		at     string
+	}{
+		{`let f = fn(x) => x f()`, fault.CodeArgumentCount, "()"},
+		{`let f = fn(x) => x f(1, 2)`, fault.CodeArgumentCount, "(1, 2)"},
+		{`print()`, fault.CodeArgumentCount, "()"},
+		{`print(1, 2)`, fault.CodeArgumentCount, "(1, 2)"},
+		{`let xs = [1] print(xs[2])`, fault.CodeIndexRange, "[2]"},
+		{`let xs = [1] print(xs[0 - 1])`, fault.CodeIndexRange, "[0 - 1]"},
+		{`let xs = [1] print(xs["wrong"])`, fault.CodeIndexType, `["wrong"]`},
+		{`let d = {"a": 1} print(d["missing"])`, fault.CodeMissingKey, `["missing"]`},
+		{`print(1 + "wrong")`, fault.CodeOperandType, `+ "wrong"`},
+		{`print(missing)`, fault.CodeUndefinedValue, "missing"},
+		{`let f = "print" f(1)`, fault.CodeNotCallable, "(1)"},
 	} {
-		prog, err := parser.Parse(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, backend := range []string{"interpreter", "vm"} {
-			t.Run(backend+"/"+source, func(t *testing.T) {
-				defer func() {
-					if recover() == nil {
-						t.Error("invalid program executed without an error")
-					}
-				}()
-				if backend == "interpreter" {
-					runtime.Run(prog)
-				} else {
-					vm.New(compiler.NewFluxCompiler().Compile(prog)).Run()
+		t.Run(test.source, func(t *testing.T) {
+			result := parser.ParseSource(source.New(1, "failure.flux", test.source))
+			if result.Failed() {
+				t.Fatalf("parse: %v", result.Diagnostics)
+			}
+			reported := map[string]*fault.Error{}
+			for _, backend := range backends {
+				_, err := backend.run(result)
+				if err == nil {
+					t.Fatalf("%s ran an invalid program without an error", backend.name)
 				}
-			})
-		}
+				failure, ok := err.(*fault.Error)
+				if !ok {
+					t.Fatalf("%s returned %T, want a *fault.Error", backend.name, err)
+				}
+				if failure.Code != test.code {
+					t.Errorf("%s reported %q, want %q", backend.name, failure.Code, test.code)
+				}
+				if got := result.Source.Text()[failure.Where.Start:failure.Where.End]; got != test.at {
+					t.Errorf("%s points at %q, want %q", backend.name, got, test.at)
+				}
+				reported[backend.name] = failure
+			}
+			interpreted, executed := reported["interpreter"], reported["vm"]
+			if interpreted.Message != executed.Message {
+				t.Errorf("backends disagree on the message: %q and %q",
+					interpreted.Message, executed.Message)
+			}
+			if interpreted.Where != executed.Where {
+				t.Errorf("backends disagree on the location: %v and %v",
+					interpreted.Where, executed.Where)
+			}
+		})
+	}
+}
+
+// TestRuntimeFailureTraces checks that a failure inside a function says which
+// call led there.
+func TestRuntimeFailureTraces(t *testing.T) {
+	const text = "let inner = fn(x) => x + \"no\"\nlet outer = fn(y) => inner(y)\nprint(outer(1))\n"
+	result := parser.ParseSource(source.New(1, "trace.flux", text))
+	if result.Failed() {
+		t.Fatalf("parse: %v", result.Diagnostics)
+	}
+	for _, backend := range backends {
+		t.Run(backend.name, func(t *testing.T) {
+			_, err := backend.run(result)
+			failure, ok := err.(*fault.Error)
+			if !ok {
+				t.Fatalf("got %v (%T), want a *fault.Error", err, err)
+			}
+			if failure.Code != fault.CodeOperandType {
+				t.Fatalf("code = %q, want %q", failure.Code, fault.CodeOperandType)
+			}
+			if failure.Where.Line != 1 {
+				t.Errorf("failure reported on line %d, want line 1", failure.Where.Line)
+			}
+			if len(failure.Trace) != 2 {
+				t.Fatalf("trace has %d frames, want 2: %+v", len(failure.Trace), failure.Trace)
+			}
+			// Innermost first: the call to inner, then the call to outer.
+			if got, want := failure.Trace[0].Function, "inner"; got != want {
+				t.Errorf("innermost frame is %q, want %q", got, want)
+			}
+			if got, want := failure.Trace[0].Call.Line, 2; got != want {
+				t.Errorf("innermost call site is on line %d, want %d", got, want)
+			}
+			if got, want := failure.Trace[1].Function, "outer"; got != want {
+				t.Errorf("outer frame is %q, want %q", got, want)
+			}
+			if got, want := failure.Trace[1].Call.Line, 3; got != want {
+				t.Errorf("outer call site is on line %d, want %d", got, want)
+			}
+		})
 	}
 }

@@ -1,8 +1,8 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,9 +11,9 @@ import (
 	"github.com/pranavms13/flux-lang/compiler"
 	"github.com/pranavms13/flux-lang/config"
 	"github.com/pranavms13/flux-lang/internal/fixtures"
-	"github.com/pranavms13/flux-lang/internal/testutil"
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
+	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/types"
 	"github.com/pranavms13/flux-lang/vm"
 )
@@ -119,23 +119,24 @@ func TestFixturePrograms(t *testing.T) {
 	}
 }
 
-func assertOutcome(t *testing.T, fixture fixtures.Fixture, mode fixtures.Mode, backend, source string) {
+func assertOutcome(t *testing.T, fixture fixtures.Fixture, mode fixtures.Mode, backend, text string) {
 	t.Helper()
 	want := fixture.Outcome(mode)
 
-	prog, err := parser.Parse(source)
-	if err != nil {
-		assertStatic(t, want, fixture, mode, []string{err.Error()})
+	result := parser.ParseSource(source.New(1, fixture.Path, text))
+	if result.Failed() {
+		assertStatic(t, want, fixture, mode, []string{result.Diagnostics[0].Message})
 		return
 	}
-	checker := types.NewTypeCheckerWithConfig(mode.TypeChecking())
+	prog, src := result.Program, result.Source
+	checker := types.NewTypeCheckerForSource(src, mode.TypeChecking())
 	checker.CheckProgram(prog)
 	if checker.HasErrors() {
 		assertStatic(t, want, fixture, mode, checker.GetErrors())
 		return
 	}
 
-	output, failure := execute(t, prog, backend)
+	output, failure := execute(prog, src, backend)
 	switch {
 	case failure != nil && want != fixtures.OutcomeRuntimeError:
 		t.Errorf("%s in %s mode: failed at run time (%v), but the manifest expects %q",
@@ -160,23 +161,16 @@ func assertStatic(t *testing.T, want fixtures.Outcome, fixture fixtures.Fixture,
 	}
 }
 
-// execute runs a program on one backend and reports an ordinary language
-// failure as an error rather than a panic. Both backends still signal runtime
-// failures by panicking; P1.4 replaces that with returned errors, and this
-// helper is where that change surfaces.
-func execute(t *testing.T, prog *ast.Program, backend string) (output string, failure error) {
-	t.Helper()
-	defer func() {
-		if raised := recover(); raised != nil {
-			failure = fmt.Errorf("%v", raised)
-		}
-	}()
-	output = testutil.CaptureOutput(t, func() {
-		if backend == "interpreter" {
-			runtime.Run(prog)
-			return
-		}
-		vm.New(compiler.NewFluxCompiler().Compile(prog)).Run()
-	})
-	return output, nil
+// execute runs a program on one backend. Both engines return their failures, so
+// a panic escaping here would be a defect in Flux rather than a mistake in the
+// fixture, and is left to fail the test loudly.
+func execute(prog *ast.Program, src *source.Source, backend string) (string, error) {
+	var out bytes.Buffer
+	if backend == "interpreter" {
+		return capture(&out, runtime.Run(prog, runtime.Options{Output: &out, Source: src}))
+	}
+	chunk := compiler.NewFluxCompilerForSource(src).Compile(prog)
+	return capture(&out, vm.NewWithOutput(chunk, &out).Run())
 }
+
+func capture(out *bytes.Buffer, err error) (string, error) { return out.String(), err }

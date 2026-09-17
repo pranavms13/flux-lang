@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/pranavms13/flux-lang/compiler"
-	"github.com/pranavms13/flux-lang/internal/testutil"
+	"github.com/pranavms13/flux-lang/fault"
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
 	"github.com/pranavms13/flux-lang/vm"
@@ -100,15 +102,30 @@ func TestCLI(t *testing.T) {
 	if output := invoke(true, "run", "bad.flux"); output != "bad\n" {
 		t.Fatal(output)
 	}
-	write("bad.flux", `let xs = [1] print(xs[2])`)
-	invoke(false, "run", "bad.flux")
+	write("bad.flux", "let xs = [1]\nprint(xs[2])\n")
+	// The interpreter reports the failure with a code and a position.
+	if output := invoke(false, "run", "bad.flux"); !strings.Contains(output, "bad.flux:2:9: error[R_INDEX_RANGE]") {
+		t.Fatalf("interpreted runtime error: %q", output)
+	}
 	invoke(true, "compile", "bad.flux")
 	badExecutable := filepath.Join(dir, "dist", "bad")
 	if goruntime.GOOS == "windows" {
 		badExecutable += ".exe"
 	}
-	if output, err := exec.Command(badExecutable).CombinedOutput(); err == nil || !strings.Contains(string(output), "Runtime error:") || strings.Contains(string(output), "panic:") {
-		t.Fatalf("compiled runtime error: %v, %s", err, output)
+	// A generated executable must report the same failure the interpreter did,
+	// and must keep reporting it after the source it was built from is gone:
+	// its positions were resolved at compile time, not looked up at run time.
+	if err := os.Remove(filepath.Join(dir, "bad.flux")); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(badExecutable).CombinedOutput()
+	switch {
+	case err == nil:
+		t.Fatal("the generated executable succeeded on an invalid program")
+	case strings.Contains(string(output), "panic:"):
+		t.Fatalf("a Go panic leaked from the generated executable: %s", output)
+	case !strings.Contains(string(output), "bad.flux:2:9: error[R_INDEX_RANGE]"):
+		t.Fatalf("compiled runtime error: %q", output)
 	}
 	write("bad.flux", `let x =`)
 	invoke(false, "run", "bad.flux")
@@ -119,22 +136,25 @@ func TestCLI(t *testing.T) {
 
 func TestRuntimeIsolationAndCompilerReuse(t *testing.T) {
 	first, _ := parser.Parse(`let secret = 42`)
-	runtime.Run(first)
+	if err := runtime.Run(first, runtime.Options{Output: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
 	second, _ := parser.Parse(`print(secret)`)
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("interpreter leaked globals between programs")
-			}
-		}()
-		runtime.Run(second)
-	}()
+	err := runtime.Run(second, runtime.Options{Output: io.Discard})
+	failure, ok := err.(*fault.Error)
+	if !ok || failure.Code != fault.CodeUndefinedValue {
+		t.Errorf("got %v, want an undefined-value failure; the interpreter leaked globals between programs", err)
+	}
+
 	c := compiler.NewFluxCompiler()
 	c.Compile(first)
 	prog, _ := parser.Parse(`print(7)`)
 	chunk := c.Compile(prog)
-	output := testutil.CaptureOutput(t, func() { vm.New(chunk).Run() })
-	if output != "7\n" {
-		t.Fatalf("reused compiler output: %q", output)
+	var out bytes.Buffer
+	if err := vm.NewWithOutput(chunk, &out).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "7\n" {
+		t.Fatalf("reused compiler output: %q", out.String())
 	}
 }

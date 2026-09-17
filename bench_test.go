@@ -2,15 +2,15 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/pranavms13/flux-lang/ast"
 	"github.com/pranavms13/flux-lang/compiler"
-	"github.com/pranavms13/flux-lang/internal/testutil"
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
+	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/types"
 	"github.com/pranavms13/flux-lang/vm"
 )
@@ -148,9 +148,11 @@ func BenchmarkCompile(b *testing.B) {
 func BenchmarkInterpret(b *testing.B) {
 	forEachProgram(b, func(b *testing.B, source string) {
 		prog := mustParse(b, source)
-		defer silenceStdout(b)()
+		options := runtime.Options{Output: io.Discard}
 		for i := 0; i < b.N; i++ {
-			runtime.Run(prog)
+			if err := runtime.Run(prog, options); err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
 }
@@ -158,9 +160,10 @@ func BenchmarkInterpret(b *testing.B) {
 func BenchmarkVM(b *testing.B) {
 	forEachProgram(b, func(b *testing.B, source string) {
 		chunk := compiler.NewFluxCompiler().Compile(mustParse(b, source))
-		defer silenceStdout(b)()
 		for i := 0; i < b.N; i++ {
-			vm.New(chunk).Run()
+			if err := vm.NewWithOutput(chunk, io.Discard).Run(); err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
 }
@@ -181,21 +184,6 @@ func mustParse(b *testing.B, source string) *ast.Program {
 	return prog
 }
 
-// silenceStdout points os.Stdout at the null device while an execution
-// benchmark runs, so the measurement is of evaluation rather than of a terminal.
-// Both engines still write to the global os.Stdout; P1.4 replaces that with an
-// injected writer, at which point this helper goes away.
-func silenceStdout(b *testing.B) func() {
-	b.Helper()
-	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	previous := os.Stdout
-	os.Stdout = null
-	return func() { os.Stdout = previous; null.Close() }
-}
-
 // TestBenchmarkProgramsAreValid keeps the baseline numbers meaningful. A
 // benchmark program that fails to type check would measure how fast the checker
 // gives up, and one that disagrees between backends would measure two different
@@ -203,20 +191,24 @@ func silenceStdout(b *testing.B) func() {
 func TestBenchmarkProgramsAreValid(t *testing.T) {
 	for _, name := range benchOrder {
 		t.Run(name, func(t *testing.T) {
-			source := benchPrograms[name]
-			prog, err := parser.Parse(source)
-			if err != nil {
-				t.Fatal(err)
+			text := benchPrograms[name]
+			result := parser.ParseSource(source.New(1, name+".flux", text))
+			if result.Failed() {
+				t.Fatal(result.Diagnostics)
 			}
-			checker := types.NewTypeChecker()
-			checker.CheckProgram(prog)
+			checker := types.NewTypeCheckerForSource(result.Source, types.TypeCheckingMode{Enabled: true})
+			checker.CheckProgram(result.Program)
 			if checker.HasErrors() {
 				t.Fatalf("type errors: %v", checker.GetErrors())
 			}
-			interpreted := testutil.CaptureOutput(t, func() { runtime.Run(prog) })
-			executed := testutil.CaptureOutput(t, func() {
-				vm.New(compiler.NewFluxCompiler().Compile(prog)).Run()
-			})
+			interpreted, err := backends[0].run(result)
+			if err != nil {
+				t.Fatalf("interpreter: %v", err)
+			}
+			executed, err := backends[1].run(result)
+			if err != nil {
+				t.Fatalf("vm: %v", err)
+			}
 			if interpreted != executed {
 				t.Errorf("backends disagree: interpreter %q, vm %q", interpreted, executed)
 			}

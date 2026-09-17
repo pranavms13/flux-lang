@@ -4,25 +4,43 @@ import (
 	"encoding/binary"
 
 	"github.com/pranavms13/flux-lang/ast"
+	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/vm"
 )
 
-type FluxCompiler struct{ chunk *vm.Chunk }
+type FluxCompiler struct {
+	chunk *vm.Chunk
+	// src resolves node positions into locations that survive serialization.
+	// It is nil for a compiler built without a source, and the chunks then
+	// carry no source map.
+	src *source.Source
+	// name is the identifier the next function literal is being bound to, so
+	// that a call trace can say "add" rather than "<anonymous>".
+	name string
+}
 
 func NewFluxCompiler() *FluxCompiler { return &FluxCompiler{} }
+
+// NewFluxCompilerForSource returns a compiler that records where each
+// instruction came from. The program it is given must have been parsed from src.
+func NewFluxCompilerForSource(src *source.Source) *FluxCompiler {
+	return &FluxCompiler{src: src}
+}
 
 func (c *FluxCompiler) Compile(prog *ast.Program) *vm.Chunk {
 	c.chunk = &vm.Chunk{}
 	for _, stmt := range prog.Statements {
 		if stmt.Let != nil {
+			c.name = stmt.Let.Name
 			c.compileExpr(stmt.Let.Expr)
-			c.emit(vm.OpDefineGlobal, c.addConstant(stmt.Let.Name))
+			c.name = ""
+			c.emitAt(stmt.Let, vm.OpDefineGlobal, c.addConstant(stmt.Let.Name))
 		} else {
 			c.compileExpr(stmt.Expr)
-			c.emit(vm.OpPrint)
+			c.emitAt(stmt.Expr, vm.OpPrint)
 		}
 	}
-	c.emit(vm.OpReturn)
+	c.emitAt(prog, vm.OpReturn)
 	return c.chunk
 }
 
@@ -35,9 +53,9 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 		c.compileBlock(expr.Block)
 	case expr.If != nil:
 		c.compileExpr(expr.If.Cond)
-		falseJump := c.emit(vm.OpJumpIfFalse, 0)
+		falseJump := c.emitAt(expr.If.Cond, vm.OpJumpIfFalse, 0)
 		c.compileExpr(expr.If.ThenExpr)
-		endJump := c.emit(vm.OpJump, 0)
+		endJump := c.emitAt(expr.If.ThenExpr, vm.OpJump, 0)
 		c.patchJump(falseJump)
 		c.compileExpr(expr.If.ElseExpr)
 		c.patchJump(endJump)
@@ -46,18 +64,21 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 		for i, p := range expr.Func.Params {
 			params[i] = p.Name
 		}
-		outer := c.chunk
-		c.chunk = &vm.Chunk{Params: params}
+		outer, outerName := c.chunk, c.name
+		// A nested function gets its own source map, so a failure inside it
+		// reports its own line rather than the line of the call.
+		c.chunk = &vm.Chunk{Params: params, Name: outerName}
+		c.name = ""
 		c.compileExpr(expr.Func.Body)
-		c.emit(vm.OpReturn)
+		c.emitAt(expr.Func.Body, vm.OpReturn)
 		fn := c.chunk
-		c.chunk = outer
-		c.emit(vm.OpClosure, c.addConstant(fn))
+		c.chunk, c.name = outer, outerName
+		c.emitAt(expr.Func, vm.OpClosure, c.addConstant(fn))
 	case expr.Bin != nil:
 		c.compileAdditive(expr.Bin.Left)
 		for _, rest := range expr.Bin.Rest {
 			c.compileAdditive(rest.Right)
-			c.compileOperator(rest.Operator)
+			c.compileOperator(rest, rest.Operator)
 		}
 	}
 }
@@ -66,22 +87,22 @@ func (c *FluxCompiler) compileAdditive(expr *ast.Additive) {
 	c.compilePrimary(expr.Left)
 	for _, rest := range expr.Rest {
 		c.compilePrimary(rest.Right)
-		c.compileOperator(rest.Operator)
+		c.compileOperator(rest, rest.Operator)
 	}
 }
 
-func (c *FluxCompiler) compileOperator(op string) {
+func (c *FluxCompiler) compileOperator(at ast.Positioned, op string) {
 	switch op {
 	case "+":
-		c.emit(vm.OpAdd)
+		c.emitAt(at, vm.OpAdd)
 	case "-":
-		c.emit(vm.OpSub)
+		c.emitAt(at, vm.OpSub)
 	case "==":
-		c.emit(vm.OpEqual)
+		c.emitAt(at, vm.OpEqual)
 	case ">":
-		c.emit(vm.OpGreater)
+		c.emitAt(at, vm.OpGreater)
 	case "<":
-		c.emit(vm.OpLess)
+		c.emitAt(at, vm.OpLess)
 	default:
 		panic("unsupported operator: " + op)
 	}
@@ -89,13 +110,13 @@ func (c *FluxCompiler) compileOperator(op string) {
 
 func (c *FluxCompiler) compileBlock(block *ast.BlockExpr) {
 	if len(block.Exprs) == 0 {
-		c.emit(vm.OpConstant, c.addConstant(nil))
+		c.emitAt(block, vm.OpConstant, c.addConstant(nil))
 		return
 	}
 	for i, expr := range block.Exprs {
 		c.compileExpr(expr)
 		if i < len(block.Exprs)-1 {
-			c.emit(vm.OpPop)
+			c.emitAt(expr, vm.OpPop)
 		}
 	}
 }
@@ -107,13 +128,13 @@ func (c *FluxCompiler) compilePrimary(expr *ast.PrimaryExpr) {
 		t := base.Term
 		switch {
 		case t.Number != nil:
-			c.emit(vm.OpConstant, c.addConstant(*t.Number))
+			c.emitAt(t, vm.OpConstant, c.addConstant(*t.Number))
 		case t.String != nil:
-			c.emit(vm.OpConstant, c.addConstant(*t.String))
+			c.emitAt(t, vm.OpConstant, c.addConstant(*t.String))
 		case t.Bool != nil:
-			c.emit(vm.OpConstant, c.addConstant(bool(*t.Bool)))
+			c.emitAt(t, vm.OpConstant, c.addConstant(bool(*t.Bool)))
 		case t.Ident != nil:
-			c.emit(vm.OpGetGlobal, c.addConstant(*t.Ident))
+			c.emitAt(t, vm.OpGetGlobal, c.addConstant(*t.Ident))
 		}
 	case base.Group != nil:
 		c.compileExpr(base.Group.Expr)
@@ -123,25 +144,40 @@ func (c *FluxCompiler) compilePrimary(expr *ast.PrimaryExpr) {
 		for _, elem := range base.List.Elems {
 			c.compileExpr(elem)
 		}
-		c.emit(vm.OpArray, len(base.List.Elems))
+		c.emitAt(base.List, vm.OpArray, len(base.List.Elems))
 	case base.Dict != nil:
 		for _, pair := range base.Dict.Pairs {
 			c.compileExpr(pair.Key)
 			c.compileExpr(pair.Value)
 		}
-		c.emit(vm.OpDict, len(base.Dict.Pairs))
+		c.emitAt(base.Dict, vm.OpDict, len(base.Dict.Pairs))
 	}
 	for _, postfix := range expr.Postfix {
 		if postfix.Call != nil {
 			for _, arg := range postfix.Call.Args {
 				c.compileExpr(arg)
 			}
-			c.emit(vm.OpCall, len(postfix.Call.Args))
+			c.emitAt(postfix.Call, vm.OpCall, len(postfix.Call.Args))
 		} else {
 			c.compileExpr(postfix.Index.Index)
-			c.emit(vm.OpIndex)
+			c.emitAt(postfix.Index, vm.OpIndex)
 		}
 	}
+}
+
+// emitAt appends an instruction and records where it came from. The location
+// is keyed by the instruction's own start offset, which is what the VM captures
+// before it reads any operands.
+func (c *FluxCompiler) emitAt(at ast.Positioned, op vm.Opcode, operands ...int) int {
+	pos := c.emit(op, operands...)
+	if c.src == nil || at == nil || !at.HasPosition() {
+		return pos
+	}
+	if c.chunk.Locations == nil {
+		c.chunk.Locations = map[int]source.Location{}
+	}
+	c.chunk.Locations[pos] = c.src.Locate(at.Span(c.src.ID()))
+	return pos
 }
 
 func (c *FluxCompiler) emit(op vm.Opcode, operands ...int) int {

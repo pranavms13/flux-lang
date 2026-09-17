@@ -114,9 +114,14 @@ Delivery rules for every implementation slice:
       They landed in `503377e`; see [docs/BASELINE.md](BASELINE.md).
 - [x] Record the exact commit and local toolchains used for the next implementation.
 - [x] Run the existing suite and retain the intentionally invalid `type_errors.flux` fixture.
-- [ ] Record parser/checker/VM benchmarks for representative small, nested, and large programs.
-- [ ] Add a fixture manifest that distinguishes valid programs, static errors, runtime errors,
+- [x] Record parser/checker/VM benchmarks for representative small, nested, and large programs.
+      `bench_test.go`; numbers in [docs/BASELINE.md](BASELINE.md). Parsing dominates the
+      pipeline by two to three orders of magnitude, and parsing nested conditionals costs
+      exponential time, which `BenchmarkParseNesting` records.
+- [x] Add a fixture manifest that distinguishes valid programs, static errors, runtime errors,
       and mode-dependent programs; never classify an example by filename alone.
+      `internal/fixtures`; a fixture's kind is derived from its declared per-mode outcomes,
+      and a file in `examples/` that the manifest does not declare fails the suite.
 
 ## 5. Phase 1 — Source positions and structured diagnostics
 

@@ -72,6 +72,16 @@ initialization, version metadata, and cleanup of generated source files.
 `source/source_test.go` covers tabs, CRLF, empty files, EOF, multiline spans,
 combining marks, and supplementary-plane characters; `diagnostic/diagnostic_test.go`
 covers code groups, builder aliasing, ordering, deduplication, and suppression.
+
+`internal/fixtures` declares what every file under `examples/` is for and what it
+is expected to do in each type-checking mode; `fixtures_test.go` runs each one in
+all four modes on both backends and fails on any example the manifest does not
+declare. A fixture's kind is derived from its outcomes, never from its filename.
+
+`bench_test.go` records the parser, checker, compiler, interpreter and VM
+baseline; see [BASELINE.md](BASELINE.md) for the numbers. Parsing dominates the
+pipeline, and parsing nested conditionals costs exponential time, so keep test
+and example programs shallow.
 The existing lexer tests remain in `lexer/tests/`.
 
 When adding language syntax, update the AST, checker, interpreter, compiler/VM,

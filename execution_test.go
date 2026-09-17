@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -97,23 +96,10 @@ func TestLargePrograms(t *testing.T) {
 	assertExecution(t, source.String(), want.String())
 }
 
-func TestExamples(t *testing.T) {
-	cases := []struct{ name, want string }{
-		{"main", "Functions\n10\nAdd Strings\nHello, Flux\nx is positive\nyes\n"},
-		{"typed", "Basic types:\n42\nFlux\nAdd result:\n30\nNumbers list:\n1\nPerson name:\nAlice\nHello, World\nStatus:\npositive\n"},
-		{"array", "1\n5\nhello\n"},
-		{"dict", "John\n30\nNew York\n42\nHello\ntrue\nAlice\nLondon\n"},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			source, err := os.ReadFile("examples/" + tt.name + ".flux")
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertExecution(t, string(source), tt.want)
-		})
-	}
-}
+// The examples under examples/ are exercised by TestFixturePrograms, which runs
+// each of them in every type-checking mode against the outcome declared in
+// internal/fixtures. It replaced a table here that listed four example names and
+// their expected output, and could not say what the other examples were for.
 
 func TestRuntimeFailures(t *testing.T) {
 	for _, source := range []string{

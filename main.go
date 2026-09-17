@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"embed"
 	"encoding/base64"
-	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +20,7 @@ import (
 	"github.com/pranavms13/flux-lang/diagnostic"
 	"github.com/pranavms13/flux-lang/fault"
 	"github.com/pranavms13/flux-lang/parser"
+	"github.com/pranavms13/flux-lang/render"
 	"github.com/pranavms13/flux-lang/runtime"
 	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/types"
@@ -40,47 +40,65 @@ var (
 // adding an import the bundle does not contain fails TestBuildBundleIsClosed
 // here rather than a user's build on their machine. Every package in it must
 // depend only on the standard library and on other members of the bundle.
-var bundledPackages = []string{"diagnostic", "fault", "source", "vm"}
+var bundledPackages = []string{"diagnostic", "fault", "render", "source", "vm"}
 
 // Embedding those packages makes compilation independent of the Flux source
 // checkout. Test files are excluded when the bundle is written out; the embed
 // patterns cannot express that.
 //
-//go:embed diagnostic/*.go fault/*.go source/*.go vm/*.go
+//go:embed diagnostic/*.go fault/*.go render/*.go source/*.go vm/*.go
 var bundleFS embed.FS
-
-func init() { gob.RegisterName("flux.Chunk", &vm.Chunk{}) }
 
 const executableTemplate = `package main
 
 import (
-	"bytes"
 	"encoding/base64"
-	"encoding/gob"
 	"fmt"
 	"os"
 
+	"github.com/pranavms13/flux-lang/diagnostic"
 	"github.com/pranavms13/flux-lang/fault"
+	"github.com/pranavms13/flux-lang/render"
+	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/vm"
 )
-
-func init() { gob.RegisterName("flux.Chunk", &vm.Chunk{}) }
 
 func main() {
 	bytecode, err := base64.StdEncoding.DecodeString("{{.Bytecode}}")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error: unreadable embedded program:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "error: this executable's embedded program is unreadable:", err)
+		os.Exit(diagnostic.ExitToolFailure)
 	}
-	var chunk vm.Chunk
-	if err := gob.NewDecoder(bytes.NewReader(bytecode)).Decode(&chunk); err != nil {
-		fmt.Fprintln(os.Stderr, "error: unreadable embedded program:", err)
-		os.Exit(2)
+	program, err := vm.Decode(bytecode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(diagnostic.ExitToolFailure)
 	}
-	if err := vm.New(&chunk).Run(); err != nil {
-		fmt.Fprintln(os.Stderr, fault.Report(err))
-		os.Exit(1)
+	if failure := vm.New(program.Chunk).Run(); failure != nil {
+		renderer := render.Renderer{Color: render.ColorEnabled(os.Stderr)}
+		// A program built with compiler.debug carries its own source, so it can
+		// show the offending line. Without it the position, code and trace are
+		// still reported.
+		if text, ok := program.Sources[failureFile(failure)]; ok {
+			renderer.Source = source.New(1, failureFile(failure), text)
+		}
+		fmt.Fprintln(os.Stderr, renderer.Failure(asFault(failure)))
+		os.Exit(diagnostic.ExitFailure)
 	}
+}
+
+func asFault(err error) *fault.Error {
+	if failure, ok := err.(*fault.Error); ok {
+		return failure
+	}
+	return &fault.Error{Code: diagnostic.CodeInternal, Message: err.Error()}
+}
+
+func failureFile(err error) string {
+	if failure, ok := err.(*fault.Error); ok {
+		return failure.Where.File
+	}
+	return ""
 }
 `
 
@@ -90,10 +108,49 @@ go 1.23.2
 `
 
 func main() {
+	// Diagnostics go to stderr; whatever the program printed has already gone
+	// to stdout, so a pipeline reads output without error text mixed into it.
 	if err := runCLI(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, report(err))
+		os.Exit(exitStatus(err))
 	}
+}
+
+// usageError is a mistake in how the command was invoked, as opposed to a
+// mistake in a Flux program.
+type usageError struct{ message string }
+
+func (e *usageError) Error() string { return e.message }
+
+func usagef(format string, args ...any) error {
+	return &usageError{message: fmt.Sprintf(format, args...)}
+}
+
+// failed marks an error as a Flux program that was rejected or that failed
+// while running, which is the one outcome that is not a tool failure.
+type failed struct{ error }
+
+// exitStatus maps an error to the convention every Flux command follows.
+func exitStatus(err error) int {
+	var programFailure failed
+	if errors.As(err, &programFailure) {
+		return diagnostic.ExitFailure
+	}
+	return diagnostic.ExitToolFailure
+}
+
+// report renders an error for the terminal. Program failures were rendered
+// where they were produced, because only there is the source available.
+func report(err error) string {
+	var tool *diagnostic.ToolError
+	if errors.As(err, &tool) {
+		return render.Renderer{Color: render.ColorEnabled(os.Stderr)}.ToolError(tool)
+	}
+	var programFailure failed
+	if errors.As(err, &programFailure) {
+		return programFailure.Error()
+	}
+	return "error: " + err.Error()
 }
 
 func runCLI(args []string) (err error) {
@@ -102,10 +159,10 @@ func runCLI(args []string) (err error) {
 	// one: presenting it as a mistake in the user's program would send them
 	// looking for a bug that is not theirs.
 	defer func() {
-		if failure := recover(); failure != nil {
-			err = errors.New(fault.Report(&fault.Error{
+		if raised := recover(); raised != nil {
+			err = errors.New(render.Renderer{Color: render.ColorEnabled(os.Stderr)}.Failure(&fault.Error{
 				Code:    diagnostic.CodeInternal,
-				Message: fmt.Sprintf("unrecovered panic: %v", failure),
+				Message: fmt.Sprintf("unrecovered panic: %v", raised),
 			}))
 		}
 	}()
@@ -122,7 +179,7 @@ func runCLI(args []string) (err error) {
 		return nil
 	case "init":
 		if len(args) != 1 {
-			return fmt.Errorf("usage: flux init")
+			return usagef("usage: flux init")
 		}
 		if err := initializeProject(); err != nil {
 			return err
@@ -131,10 +188,10 @@ func runCLI(args []string) (err error) {
 		return nil
 	case "run", "compile":
 		if len(args) != 2 {
-			return fmt.Errorf("%s command requires one file argument", args[0])
+			return usagef("%s command requires one file argument", args[0])
 		}
 	default:
-		return fmt.Errorf("unknown command %q; use flux help", args[0])
+		return usagef("unknown command %q; use flux help", args[0])
 	}
 	cfg, err := config.GetConfigFromCurrentDir()
 	if err != nil {
@@ -145,31 +202,39 @@ func runCLI(args []string) (err error) {
 		return diagnostic.Tool("read source file", args[1], err)
 	}
 	parsed := parser.ParseSource(source.NewMap().Add(args[1], string(text)))
+	renderer := render.Renderer{Source: parsed.Source, Color: render.ColorEnabled(os.Stderr)}
 	if parsed.Failed() {
-		return errors.New(formatDiagnostics(parsed.Source, parsed.Diagnostics))
+		return failed{errors.New(renderer.Diagnostics(parsed.Diagnostics))}
 	}
 	prog := parsed.Program
 	tc := types.NewTypeCheckerForSource(parsed.Source, types.TypeCheckingMode{
 		Strict: cfg.TypeChecking.Strict, WarnOnly: cfg.TypeChecking.WarnOnly, Enabled: cfg.TypeChecking.Enabled,
 	})
 	tc.CheckProgram(prog)
-	if tc.HasWarnings() {
-		fmt.Fprintln(os.Stderr, "Type checking warnings:")
-		for _, warning := range tc.GetWarnings() {
-			fmt.Fprintf(os.Stderr, "  - %s\n", warning)
-		}
+	if warnings := tc.DiagnosticsWithSeverity(diagnostic.SeverityWarning); len(warnings) > 0 {
+		fmt.Fprintln(os.Stderr, renderer.Diagnostics(warnings))
 	}
-	if tc.HasErrors() {
-		return fmt.Errorf("type checking failed:\n  - %s", strings.Join(tc.GetErrors(), "\n  - "))
+	if errs := tc.DiagnosticsWithSeverity(diagnostic.SeverityError); len(errs) > 0 {
+		return failed{errors.New(renderer.Diagnostics(errs))}
 	}
 	if args[0] == "run" {
-		if failure := runtime.Run(prog, runtime.Options{Output: os.Stdout, Source: parsed.Source}); failure != nil {
-			return errors.New(fault.Report(failure))
+		failure := runtime.Run(prog, runtime.Options{Output: os.Stdout, Source: parsed.Source})
+		if failure == nil {
+			return nil
 		}
-		return nil
+		reported, ok := failure.(*fault.Error)
+		if !ok {
+			return failure
+		}
+		// An internal defect is not a failure of the user's program, so it does
+		// not get the status that says one failed.
+		if reported.Code == diagnostic.CodeInternal {
+			return errors.New(renderer.Failure(reported))
+		}
+		return failed{errors.New(renderer.Failure(reported))}
 	}
 	chunk := compiler.NewFluxCompilerForSource(parsed.Source).Compile(prog)
-	output, err := compileExecutable(chunk, args[1])
+	output, err := compileExecutable(chunk, parsed.Source, cfg.Compiler.Debug)
 	if err != nil {
 		return err
 	}
@@ -177,22 +242,28 @@ func runCLI(args []string) (err error) {
 	return nil
 }
 
-func compileExecutable(chunk *vm.Chunk, sourcePath string) (string, error) {
-	var bytecode bytes.Buffer
-	if err := gob.NewEncoder(&bytecode).Encode(chunk); err != nil {
+func compileExecutable(chunk *vm.Chunk, src *source.Source, debug bool) (string, error) {
+	var sources map[string]string
+	if debug {
+		sources = map[string]string{src.Name(): src.Text()}
+	}
+	bytecode, err := vm.Encode(chunk, sources)
+	if err != nil {
 		return "", err
 	}
 	tempDir, err := os.MkdirTemp("", "flux-build-*")
 	if err != nil {
 		return "", err
 	}
+	// The temporary module is removed whether the build succeeds or fails, so a
+	// failed compilation leaves nothing behind to explain.
 	defer os.RemoveAll(tempDir)
 	tmpl, err := template.New("executable").Parse(executableTemplate)
 	if err != nil {
 		return "", err
 	}
 	var generated bytes.Buffer
-	if err := tmpl.Execute(&generated, map[string]string{"Bytecode": base64.StdEncoding.EncodeToString(bytecode.Bytes())}); err != nil {
+	if err := tmpl.Execute(&generated, map[string]string{"Bytecode": base64.StdEncoding.EncodeToString(bytecode)}); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(tempDir, "main.go"), generated.Bytes(), 0600); err != nil {
@@ -204,7 +275,7 @@ func compileExecutable(chunk *vm.Chunk, sourcePath string) (string, error) {
 	if err := os.MkdirAll("dist", 0755); err != nil {
 		return "", err
 	}
-	name := strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+	name := strings.TrimSuffix(filepath.Base(src.Name()), filepath.Ext(src.Name()))
 	if goruntime.GOOS == "windows" {
 		name += ".exe"
 	}
@@ -224,24 +295,6 @@ func compileExecutable(chunk *vm.Chunk, sourcePath string) (string, error) {
 		return "", fmt.Errorf("build executable (Go must be installed): %w\n%s", err, result)
 	}
 	return output, nil
-}
-
-// formatDiagnostics renders diagnostics as one line each, with their notes.
-// It is a stopgap: P1.6 adds the real renderer, with source snippets, related
-// locations, optional colour, and a JSON representation, and the checker and
-// both engines report through it too.
-func formatDiagnostics(src *source.Source, diagnostics []diagnostic.Diagnostic) string {
-	rendered := make([]string, 0, len(diagnostics))
-	for _, d := range diagnostics {
-		position := src.Position(d.Primary.Start)
-		line := fmt.Sprintf("%s:%d:%d: %s[%s]: %s",
-			src.Name(), position.Line, position.Display, d.Severity, d.Code, d.Message)
-		for _, note := range d.Notes {
-			line += "\n  = note: " + note
-		}
-		rendered = append(rendered, line)
-	}
-	return strings.Join(rendered, "\n")
 }
 
 // writeBundle materializes the bundled packages under the module path they

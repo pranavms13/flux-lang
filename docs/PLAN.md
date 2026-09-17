@@ -290,21 +290,41 @@ the VM imported nothing.
       names a package outside the bundle or any external module.
 - [x] Build with workspace discovery disabled; verify dependency resolution with
       `GOWORK=off` and `GOPROXY=off` using an already installed Go toolchain.
-- [ ] Give serialized chunks a format version and a deliberate gob registration scheme.
-- [ ] Store display filenames and precomputed line/column locations needed after the
+- [x] Give serialized chunks a format version and a deliberate gob registration scheme.
+      `vm.Program` wraps the chunk with `vm.ProgramFormatVersion`; `vm.Encode`/`vm.Decode`
+      own the registration, so the compiler and every generated executable use one scheme
+      and a mismatched format is refused with an instruction rather than a decode error.
+- [x] Store display filenames and precomputed line/column locations needed after the
       original source is removed. Never rely on an absolute development-machine path.
-- [ ] Define `compiler.debug` to optionally embed source text for snippets; retain useful
+      Done in P1.4: `source.Location` holds the display filename with the line and column
+      already resolved, and the CLI test deletes the source before running the executable.
+- [x] Define `compiler.debug` to optionally embed source text for snippets; retain useful
       codes, locations, and traces when source text is omitted. Document size/source disclosure.
-- [ ] Verify cleanup on compilation failure and successful execution from another directory.
+      `vm.Program.Sources`, filled only when `compiler.debug` is set. Without it the
+      executable still reports code, position, and trace; `TestCLI` asserts it embeds no
+      source, and `TestCompileDebugEmbedsSource` asserts the snippet comes from inside the
+      binary by deleting the file first.
+- [x] Verify cleanup on compilation failure and successful execution from another directory.
+      `TestCompilationFailureCleansUp` counts leftover build directories around a failed
+      compile; `TestCLI` runs the built executable from a different directory.
 
 ### P1.6 — Render and integrate
 
-- [ ] Add a plain-text renderer with optional terminal styling and stable no-color output.
-- [ ] Add a versioned JSON diagnostic representation for later CLI/editor reuse.
-- [ ] Keep diagnostics on stderr for execution; program output remains on stdout.
-- [ ] Define command exit behavior once and use it in the CLI and generated executable.
-      Proposed convention: `0` success, `1` language/check failure, `2` usage/tool/internal failure.
-- [ ] Add examples of diagnostics to the README and a diagnostic-code reference.
+- [x] Add a plain-text renderer with optional terminal styling and stable no-color output.
+      `render.Renderer`. Colour is off unless the destination is a terminal and always off
+      under `NO_COLOR`; a test asserts that styling changes no text, only how it is drawn.
+      Snippets expand tabs before drawing and measure the underline in the same columns.
+- [x] Add a versioned JSON diagnostic representation for later CLI/editor reuse.
+      `render.JSONVersion`; positions carry byte offsets and line/column together, because
+      neither can be derived from the other without the source.
+- [x] Keep diagnostics on stderr for execution; program output remains on stdout.
+      `TestCLI` captures the two streams separately and asserts each is what it should be.
+- [x] Define command exit behavior once and use it in the CLI and generated executable.
+      `diagnostic.ExitSuccess`/`ExitFailure`/`ExitToolFailure`. An internal defect exits 2,
+      not 1: it is not a failure of the user's program.
+- [x] Add examples of diagnostics to the README and a diagnostic-code reference.
+      [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) is generated from the code registry, and a test
+      fails when it drifts.
 
 Target presentation, using illustrative wording and codes:
 
@@ -317,14 +337,37 @@ main.flux:4:5: error[T_ARGUMENT_TYPE]: expected int, found string
 
 ### Phase 1 completion criteria
 
-- [ ] Lexer, parser, checker, and ordinary runtime failures contain stable codes and locations.
-- [ ] Both backends and an actual generated executable agree on runtime error code and location.
-- [ ] A generated executable still reports a location after its source file is deleted.
-- [ ] Human and JSON outputs represent the same diagnostic data.
-- [ ] Existing successful outputs remain unchanged; error-text changes are intentionally updated.
-- [ ] Tests cover Unicode/CRLF positions, nested calls, failures after variable-length
+- [x] Lexer, parser, checker, and ordinary runtime failures contain stable codes and locations.
+      Thirty codes across five groups, listed in [docs/DIAGNOSTICS.md](DIAGNOSTICS.md).
+- [x] Both backends and an actual generated executable agree on runtime error code and location.
+      `TestRuntimeFailures` compares the two engines' codes, messages and spans rather than
+      their prose; `TestCLI` checks the built executable reports what the interpreter did.
+- [x] A generated executable still reports a location after its source file is deleted.
+      `TestCLI` deletes it first. With `compiler.debug` it prints the line too, which
+      `TestCompileDebugEmbedsSource` proves comes from inside the binary.
+- [x] Human and JSON outputs represent the same diagnostic data.
+      `TestTextAndJSONDescribeTheSameDiagnostic` renders one record both ways and checks
+      that everything the JSON asserts is findable in the text.
+- [x] Existing successful outputs remain unchanged; error-text changes are intentionally updated.
+      The only deliberate wording changes are the runtime catalogue, which now names types in
+      the language's vocabulary instead of Go's, and argument numbering, which counts from one.
+- [x] Tests cover Unicode/CRLF positions, nested calls, failures after variable-length
       instructions, debug-on/off artifacts, and errors in nested function chunks.
-- [ ] No new runtime import depends on a package missing from the embedded build bundle.
+      `TestFailureAfterVariableLengthInstructions` and `TestSourceMapIsKeyedAtInstructionStarts`
+      cover the third: the latter walks the bytecode and rejects a location keyed inside an
+      operand, which would look up successfully and report the wrong construct.
+- [x] No new runtime import depends on a package missing from the embedded build bundle.
+      `TestBuildBundleIsClosed` parses the bundled imports rather than waiting for a build to
+      fail on someone's machine.
+
+Phase 1 is complete. Two things it deliberately did not fix, for the phase that
+owns them:
+
+- The expected-token set in a syntax error is still recovered from Participle's
+  message text, because the library keeps the set unexported. Everything else
+  reads typed errors.
+- Lenient and strict modes still disagree about what a mismatched conditional
+  evaluates to. That is inference behavior, which Phase 4 settles.
 
 ## 6. Phase 2 — Language specification and semantic contracts
 

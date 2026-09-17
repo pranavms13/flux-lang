@@ -73,6 +73,46 @@ const (
 // Groups lists every reserved group in reporting order.
 var Groups = []Group{GroupSyntax, GroupBinding, GroupType, GroupRuntime, GroupInternal}
 
+// Name returns the group's human name.
+func (g Group) Name() string {
+	switch g {
+	case GroupSyntax:
+		return "Syntax"
+	case GroupBinding:
+		return "Binding"
+	case GroupType:
+		return "Type"
+	case GroupRuntime:
+		return "Runtime"
+	case GroupInternal:
+		return "Internal"
+	default:
+		return string(g)
+	}
+}
+
+// Description explains when a group's codes are reported.
+func (g Group) Description() string {
+	switch g {
+	case GroupSyntax:
+		return "The source could not be read as Flux. Reported before anything is checked or run."
+	case GroupBinding:
+		return "A name does not resolve, or is declared more than once. Reported while checking, " +
+			"or while running for a name that only some paths define."
+	case GroupType:
+		return "A value does not have the type its use requires. Reported while checking, and " +
+			"downgraded to a warning or suppressed entirely by the configured mode."
+	case GroupRuntime:
+		return "The program was accepted and then failed while running. Reported identically by " +
+			"the interpreter, the VM, and a generated executable."
+	case GroupInternal:
+		return "A defect in Flux itself. A program should not be able to provoke one; if yours " +
+			"does, that is worth reporting."
+	default:
+		return ""
+	}
+}
+
 // Code identifies one kind of diagnostic, for example "T_ARGUMENT_TYPE". Codes
 // are part of the tool's contract: tests assert on them, editors filter by
 // them, and users search for them, so a code's meaning must not drift even when
@@ -366,3 +406,22 @@ func (b *Bag) WithSeverity(severity Severity) []Diagnostic {
 	}
 	return matching
 }
+
+// Exit statuses, defined once so that the CLI and every generated executable
+// agree on what a status means.
+//
+// The distinction that matters is between the last two. A program that fails to
+// compile or to run has told the user something true about their program, and
+// scripts treat that as a normal outcome. A tool failure means Flux could not
+// do its job at all — an unreadable file, a missing Go toolchain, a defect in
+// Flux — and a script that retries or reports differently needs to tell them
+// apart without parsing messages.
+const (
+	// ExitSuccess means the command did what was asked.
+	ExitSuccess = 0
+	// ExitFailure means the program was rejected or failed while running.
+	ExitFailure = 1
+	// ExitToolFailure means Flux could not run the command: bad usage, a
+	// missing file, a broken environment, or an internal defect.
+	ExitToolFailure = 2
+)

@@ -15,7 +15,7 @@ func TestTypeCheckingModes(t *testing.T) {
 	}{
 		{"assignment", `let x: int = "hello"`, "type mismatch", false},
 		{"no implicit conversion", `let x: string = 1`, "type mismatch", false},
-		{"call argument", `let f = fn(x: int) => x print(f("wrong"))`, "argument 0", false},
+		{"call argument", `let f = fn(x: int) => x print(f("wrong"))`, "argument 1", false},
 		{"return", `let f = fn(): int => "wrong"`, "return type mismatch", false},
 		{"addition", `print(1 + "wrong")`, "invalid operands", false},
 		{"subtraction", `print("wrong" - 1)`, "invalid operands", false},

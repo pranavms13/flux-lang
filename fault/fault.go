@@ -215,30 +215,3 @@ func plural(n int, noun string) string {
 	}
 	return noun + "s"
 }
-
-// Report renders a failure for a terminal, with its call trace.
-//
-// The CLI and every generated executable call this, so a program reports the
-// same way whether it was run from source or built into a binary. It lives here
-// rather than in the CLI because a generated executable does not have the CLI.
-func Report(err error) string {
-	failure, ok := err.(*Error)
-	if !ok {
-		return fmt.Sprintf("error: %v", err)
-	}
-	kind := "error"
-	if failure.Code == diagnostic.CodeInternal {
-		kind = "internal error"
-	}
-	rendered := fmt.Sprintf("%s[%s]: %s", kind, failure.Code, failure.Message)
-	if failure.Where.IsValid() {
-		rendered = fmt.Sprintf("%s: %s", failure.Where, rendered)
-	}
-	for _, frame := range failure.Trace {
-		rendered += fmt.Sprintf("\n  in %s, called at %s", frame.Function, frame.Call)
-	}
-	if failure.Code == diagnostic.CodeInternal {
-		rendered += "\n  = note: this is a bug in Flux, not in the program being run"
-	}
-	return rendered
-}

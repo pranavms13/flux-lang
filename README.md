@@ -283,6 +283,58 @@ Type checking warnings:
 
 For more examples, look into [Examples](./examples). `type_errors.flux` is intentionally invalid; the other examples run with the default configuration.
 
+## Diagnostics
+
+Every problem Flux reports names the file, the line and the construct it is
+about, carries a stable code, and — where it helps — points at the declaration
+it disagrees with.
+
+A type error shows both halves of the disagreement, because knowing which of the
+two is wrong is the actual question:
+
+```text
+types.flux:2:11: error[T_ARGUMENT_TYPE]: argument 1 has type string, expected int
+2 | print(add("5", 10))
+  |           ^^^
+  = note: parameter "a" is declared as int here at types.flux:1:14
+```
+
+A failure while running says which calls led there:
+
+```text
+trace.flux:1:24: error[R_OPERAND_TYPE]: cannot apply + to int and string
+1 | let inner = fn(x) => x + "no"
+  |                        ^^^^^^
+  in inner, called at trace.flux:2:27
+  in outer, called at trace.flux:3:12
+```
+
+An unfinished construct is reported as one, rather than as an unexpected token
+that happens to be the end of the file:
+
+```text
+syntax.flux:2:1: error[S_UNEXPECTED_EOF]: unexpected end of input, expected Expr
+  = note: a construct started earlier in the file was never finished
+```
+
+Compiled executables report the same way. Their positions are resolved when the
+program is compiled, not looked up when it fails, so a built program still says
+`main.flux:2:9` after the `.flux` file is gone. Set `compiler.debug` in
+`flux.json` to embed the source as well, and the executable can show the
+offending line too — at the cost of a larger binary that contains your source.
+
+Diagnostics go to stderr and program output to stdout, so a pipeline reads one
+without the other. Commands exit `0` on success, `1` when a program is rejected
+or fails while running, and `2` when Flux could not do the job at all — bad
+usage, a missing file, or a bug in Flux.
+
+Colour is used only when writing to a terminal, and never when `NO_COLOR` is
+set, so redirected output is byte-stable.
+
+The code in brackets is the stable part; wording may improve, codes do not
+change meaning. They are listed in
+[the diagnostic reference](docs/DIAGNOSTICS.md).
+
 ## Configuration Examples
 
 See the `examples/` directory for configuration examples:
@@ -376,6 +428,8 @@ Full detail, including allocation counts and the methodology, is in
 ## Project Structure
 
 - `source/` - Source snapshots and the byte spans that locate code in them
+- `render/` - The one place a diagnostic becomes text: snippets, colour, JSON
+- `fault/` - The catalogue of failures a program can produce while running
 - `diagnostic/` - Structured error reporting: codes, severities, spans, notes
 - `lexer/` - Tokenizes source code into tokens
 - `parser/` - Parses tokens into an Abstract Syntax Tree (AST)

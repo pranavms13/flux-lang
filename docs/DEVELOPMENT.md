@@ -50,10 +50,14 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   change a severity. `FunctionType.Params` carries where each parameter was
   written, which is provenance rather than part of the type, so `Equals`
   ignores it.
+- `render/` is the only place a diagnostic becomes text. Nothing else writes a
+  caret, a colour escape, or a JSON field name, so a diagnostic looks the same
+  whichever stage found it. Colour is off unless the destination is a terminal
+  and always off under `NO_COLOR`. It is in the executable bundle, because a
+  generated program has no CLI to draw its failures for it.
 - `fault/` is the catalogue of failures a program can produce while it runs.
   Both engines report through it, so a failure has one code and one wording
-  whichever engine noticed it, and `fault.Report` renders it for a terminal —
-  including in a generated executable, which has no CLI to do it.
+  whichever engine noticed it.
 - `runtime/` evaluates AST nodes with a fresh global environment for every run.
   Closures capture enclosing function parameters; globals are resolved at call time.
   `Run` returns failures rather than panicking and takes its output writer
@@ -72,7 +76,11 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   an internal defect, because only a compiler bug can cause one.
 - `main.go` provides the CLI. Compilation writes the packages listed in
   `bundledPackages` into a temporary module alongside the generated program, then
-  invokes Go with `GOWORK=off` and `GOPROXY=off`. Every bundled package depends
+  invokes Go with `GOWORK=off` and `GOPROXY=off`. The program is serialized
+  through `vm.Encode` with a format version, so an executable built by an older
+  Flux says so instead of failing to decode. Setting `compiler.debug` embeds the
+  source text too, which lets the executable print the offending line at the
+  cost of a larger binary containing your source. Every bundled package depends
   only on the standard library and on other members of the bundle, which
   `TestBuildBundleIsClosed` enforces. Generated programs need neither the Flux
   checkout nor Go at runtime.
@@ -121,6 +129,12 @@ covers code groups, builder aliasing, ordering, deduplication, and suppression.
 is expected to do in each type-checking mode; `fixtures_test.go` runs each one in
 all four modes on both backends and fails on any example the manifest does not
 declare. A fixture's kind is derived from its outcomes, never from its filename.
+
+`render/render_test.go` covers caret alignment against expanded tabs, stable
+no-colour output, multi-line spans, call traces, and the JSON shape.
+`docs_test.go` regenerates [DIAGNOSTICS.md](DIAGNOSTICS.md) from the code
+registry and fails when the committed file drifts; run
+`FLUX_UPDATE_DOCS=1 go test -run TestDiagnosticReferenceIsCurrent .` to update it.
 
 `bench_test.go` records the parser, checker, compiler, interpreter and VM
 baseline; see [BASELINE.md](BASELINE.md) for the numbers. Parsing dominates the

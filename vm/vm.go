@@ -36,6 +36,22 @@ const (
 	OpDict
 )
 
+// Operands returns how many four-byte operands an opcode carries.
+//
+// It is what makes a chunk walkable: instructions are variable length, so
+// anything that steps through code — a disassembler, or a test checking that
+// the source map is keyed at instruction boundaries — needs this table rather
+// than a guess.
+func (o Opcode) Operands() int {
+	switch o {
+	case OpConstant, OpDefineGlobal, OpGetGlobal, OpCall, OpClosure,
+		OpJumpIfFalse, OpJumpIfTrue, OpJump, OpArray, OpDict:
+		return 1
+	default:
+		return 0
+	}
+}
+
 type Chunk struct {
 	Code      []byte
 	Constants []interface{}

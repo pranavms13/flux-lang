@@ -542,10 +542,11 @@ func (tc *TypeChecker) CheckCallExpr(fnType FluxType, calleeSpan source.Span, ca
 // disagrees with, which is the pair a reader needs in order to decide which of
 // the two is wrong.
 func (tc *TypeChecker) reportArgumentMismatch(funcType FunctionType, i int, arg *ast.Expr, argType, expectedType FluxType) {
+	// Arguments are numbered from one, the way a person counts them.
 	d := diagnostic.Error(CodeArgumentType, tc.span(arg),
-		"argument %d has type %s, expected %s", i, argType.String(), expectedType.String())
+		"argument %d has type %s, expected %s", i+1, argType.String(), expectedType.String())
 	if param, ok := funcType.Param(i); ok {
-		d = d.WithRelated(param.Span, "parameter %s is declared as %s here",
+		d = d.WithRelated(param.Span, "parameter %q is declared as %s here",
 			param.Name, expectedType.String())
 	}
 	tc.report(always, d)

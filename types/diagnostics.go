@@ -156,3 +156,9 @@ func (tc *TypeChecker) renderOne(d diagnostic.Diagnostic) string {
 	position := tc.source.Position(d.Primary.Start)
 	return fmt.Sprintf("%s:%d:%d: %s", tc.source.Name(), position.Line, position.Display, message)
 }
+
+// DiagnosticsWithSeverity returns the reported diagnostics of one severity, for
+// a caller that renders errors and warnings differently.
+func (tc *TypeChecker) DiagnosticsWithSeverity(severity diagnostic.Severity) []diagnostic.Diagnostic {
+	return tc.diagnostics.WithSeverity(severity)
+}

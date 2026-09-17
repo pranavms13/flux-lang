@@ -330,8 +330,53 @@ make build-all
 
 `+` and `-` associate left to right and bind more tightly than `==`, `<`, and `>`. Use parentheses to group expressions. `print(value)` outputs immediately and returns void.
 
+## Performance
+
+Reference numbers from `make bench` on an Apple M3 Pro (darwin/arm64, Go 1.25.1).
+They describe one machine at one commit, so treat them as a shape rather than a
+specification. `small` is an ordinary seven-line script, `nested` is six levels
+of nested conditionals plus a closure, and `large` is 300 bindings with a
+300-element list.
+
+| Stage | small | nested | large |
+| --- | --- | --- | --- |
+| Parse | 298 µs | 2.64 ms | 8.01 ms |
+| Type check | 1.23 µs | 1.75 µs | 34.9 µs |
+| Compile | 1.49 µs | 1.82 µs | 31.4 µs |
+| Interpret | 3.82 µs | 2.50 µs | 36.9 µs |
+| VM | 3.81 µs | 2.66 µs | 27.4 µs |
+
+Two things are worth knowing before you read too much into these.
+
+**Parsing dominates.** It costs two to three orders of magnitude more than every
+other stage combined: parsing a 270-byte script takes 298 µs, checking it takes
+1.2 µs, and running it takes under 4 µs. If a Flux program feels slow to start,
+the parser is why.
+
+**Nested conditionals parse in exponential time.** The parser uses unbounded
+lookahead, so each conditional nested inside another multiplies the work by
+roughly 1.8x:
+
+| Nesting depth | 2 | 4 | 6 | 8 |
+| --- | --- | --- | --- | --- |
+| Parse | 278 µs | 772 µs | 2.64 ms | 9.98 ms |
+
+It does not level off. Sixteen nested conditionals make a 450-byte program that
+takes over two seconds to parse. Grouped expressions and long operator chains are
+unaffected — the cost is specific to nesting `if ... then ... else` inside itself.
+Keep conditionals shallow for now; this is a grammar problem, and fixing it is
+[planned work](docs/PLAN.md).
+
+The interpreter and the VM perform within a few percent of each other, so choose
+between `flux run` and `flux compile` on distribution needs rather than speed.
+
+Full detail, including allocation counts and the methodology, is in
+[the development baseline](docs/BASELINE.md).
+
 ## Project Structure
 
+- `source/` - Source snapshots and the byte spans that locate code in them
+- `diagnostic/` - Structured error reporting: codes, severities, spans, notes
 - `lexer/` - Tokenizes source code into tokens
 - `parser/` - Parses tokens into an Abstract Syntax Tree (AST)
 - `types/` - Type system implementation with type checking

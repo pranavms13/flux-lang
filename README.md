@@ -1,6 +1,8 @@
 # Flux Language
 
-Flux is a simple, interpreted programming language implemented in Go. It features a clean syntax, **configurable static type safety**, and supports basic programming constructs like functions, conditionals, and string operations.
+Flux is a small programming language implemented in Go. A program can be run
+directly or compiled to a standalone executable; both paths go through the same
+type checker and report failures with the same codes and positions.
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pranavms13/flux-lang)
 ## Author
@@ -9,18 +11,46 @@ Flux is a simple, interpreted programming language implemented in Go. It feature
 - GitHub: [@pranavms13](https://github.com/pranavms13)
 - Email: [flux@pranavms.dev](mailto:flux@pranavms.dev)
 
-## Supported Features
+## Language specification
 
-- **Configurable Type Safety**: Static type checking with multiple modes via `flux.json`
-- Basic and advanced type annotations (int, string, bool, void, lists, dictionaries, functions)
-- Basic Inline Function definitions and calls with typed parameters
-- Strings with type checking
-- Conditional expressions with type validation
-- Basic arithmetic operations with type safety
-- Print statements for output
-- Lists with homogeneous type checking
-- Dictionaries with typed keys and values
-- Type inference for backward compatibility
+[docs/SPEC.md](docs/SPEC.md) says what a Flux program means. Every rule in it has
+an identifier and at least one fixture under
+[`testdata/conformance/`](testdata/conformance) that runs on both the interpreter
+and the VM, so the document and the implementation cannot drift apart.
+
+A rule marked `(phase N)` is a decision that has been made and not yet carried
+out; its fixture asserts what Flux does *today* and fails if that ever starts to
+match the rule without the rule being marked done. The reasoning behind each
+decision is in [docs/decisions/](docs/decisions/), and anything that will change
+an existing program has a before-and-after example in
+[docs/MIGRATION.md](docs/MIGRATION.md).
+
+## What the language has today
+
+This is the whole of it. Anything not listed is not implemented.
+
+- **Values**: `int` (signed 64-bit), `string`, `bool` (`true`/`false`, with
+  `yes`/`no` as aliases), `void`, lists, dictionaries and functions.
+- **Operators**: `+` on two `int`s or two `string`s, `-` on two `int`s, and
+  `==`, `<`, `>`. Comparison binds more loosely than `+` and `-`; both levels
+  associate to the left. Parentheses group.
+- **Expressions**: `if C then A else B` (the `else` is required), function
+  literals `fn(x: int): int => body`, calls, indexing `c[k]`, list and
+  dictionary literals, and blocks `{ e1 e2 }` whose value is the last
+  expression.
+- **Declarations**: top-level `let`, optionally annotated. A top-level
+  expression whose value is not void displays it.
+- **Built-ins**: `print`, which writes one line and returns void. It is an
+  ordinary binding and can be shadowed.
+- **Type checking**: static, with four modes selected by `flux.json`, and
+  annotations for every type form. An unannotated parameter is not constrained.
+- **Diagnostics**: every failure carries a code and underlines the construct
+  that is wrong, identically from both execution engines.
+
+There is no multiplication or division, no unary minus, no `!`, `&&` or `||`, no
+loops, no assignment, no `return`, no modules and no standard library beyond
+`print`. [docs/SPEC.md](docs/SPEC.md) records which of those are decided for a
+later phase and which are simply absent.
 
 ## Configuration System
 
@@ -112,7 +142,10 @@ The `flux.json` file supports the following options:
 
 ## Type System
 
-Flux checks concrete types and annotations before execution. Untyped function parameters use an unknown type; inference is not yet a full constraint solver.
+Flux checks concrete types and annotations before execution. An unannotated
+function parameter is given an unknown type that is compatible with everything,
+so it is not checked; inference is not a constraint solver. The rules are
+`TYP-*` in [the specification](docs/SPEC.md#4-types-and-annotations).
 
 ### Basic Types
 - `int`: Integer numbers
@@ -441,6 +474,12 @@ Full detail, including allocation counts and the methodology, is in
 - `vm/` - Virtual machine that executes bytecode
 - `ast/` - Core AST node definitions with type annotation support
 - `runtime/` - Runtime functionality and built-in functions
+- `internal/conformance/` - The fixture format the specification is checked with
+- `internal/fixtures/` - What every file under `examples/` is expected to do
+- `testdata/conformance/` - One or more fixtures for every rule in the specification
+- `docs/` - The [specification](docs/SPEC.md), the [decisions](docs/decisions/) behind
+  it, the [migration notes](docs/MIGRATION.md), the [diagnostic codes](docs/DIAGNOSTICS.md),
+  and the [plan](docs/PLAN.md)
 - `vsce/` - VS Code Extension for Flux Language
 
 ## Dependencies

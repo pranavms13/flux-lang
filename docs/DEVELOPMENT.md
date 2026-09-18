@@ -156,6 +156,7 @@ or extend the embedding/build step if the VM is split into multiple files.
 - Arithmetic supports `+` and `-`; comparisons support `==`, `<`, and `>`.
   Parentheses control grouping. Multiplication, division, unary negation, logical
   operators, loops, assignment, imports and explicit `return` are not implemented.
+  [SPEC.md](SPEC.md) is the full account; this section is the summary.
 - Lists and dictionaries are homogeneous when checking is enabled. Dictionary
   keys are integers, strings, or booleans. Duplicate keys keep the last value.
 - Lenient mode permits truthy conditions, differing branch types and unlike-type
@@ -174,12 +175,20 @@ or extend the embedding/build step if the VM is split into multiple files.
 
 ## Next development priorities
 
-1. Complete Phase 2 of [the development plan](PLAN.md): an executable language
-   specification and recorded semantic decisions.
-2. Implement Phase 3's core expressions, local bindings, lexical closures, and
-   typed recursion in both backends with shared behavioral tests.
-3. Add Phase 4's constraint inference, type schemes, and precise checking-mode
-   rules, including strict mode for unannotated functions.
+Phase 2 is complete: [the specification](SPEC.md), the
+[decision records](decisions/), the [migration notes](MIGRATION.md), and the
+conformance suite under `testdata/conformance/` landed together. Every rule in
+the specification has at least one fixture that runs on both engines, and the
+rules a later phase changes have fixtures that assert today's behavior and fail
+if it silently starts matching the rule.
+
+1. Implement Phase 3 against the fixtures that already describe it. The planned
+   rules are listed in [SPEC.md](SPEC.md) with a `(phase 3)` marker, and each has
+   a decision record naming the slice that carries it.
+2. Add Phase 4's constraint inference, type schemes, and precise checking-mode
+   rules, including strict mode for unannotated functions. See
+   [D-17](decisions/inference.md) for what `UnknownType` has to be replaced with
+   and why.
 4. Exercise release automation in GitHub. The workflow now accepts explicitly
    created release versions, grants release write permissions, fetches history for
    changelogs, and lets the release action create the tag. Remote publishing still

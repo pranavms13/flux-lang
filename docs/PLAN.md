@@ -381,21 +381,38 @@ all proposed breaking changes.
 
 ### P2.1 — Record the language grammar and value model
 
-- [ ] Document lexical rules, comments, string escapes, identifiers, reserved words,
-      boolean aliases, literals, and the role of whitespace.
-- [ ] Specify operator precedence/associativity, calls, indexing, conditional expressions,
-      function literals, lists, dictionaries, and blocks.
-- [ ] Define the difference between an expression value and statement output.
-- [ ] Specify declaration visibility, shadowing, evaluation order, function arity,
-      block results, closure capture, and recursion.
-- [ ] Specify indexing, missing-key failures, equality, printing, and integer boundaries.
-- [ ] Define each configuration mode and which errors it can downgrade or disable.
-- [ ] State which behaviors are intentionally unspecified; do not inherit Go behavior accidentally.
+The specification is [docs/SPEC.md](SPEC.md). Every normative rule in it carries an
+identifier, and `TestSpecRulesHaveFixtures` fails if one is added without a fixture.
+
+- [x] Document lexical rules, comments, string escapes, identifiers, reserved words,
+      boolean aliases, literals, and the role of whitespace. Section 1, `LEX-*`.
+- [x] Specify operator precedence/associativity, calls, indexing, conditional expressions,
+      function literals, lists, dictionaries, and blocks. Sections 2–3, `GRM-*`.
+- [x] Define the difference between an expression value and statement output.
+      `EVL-TOP-LEVEL-DISPLAY`, `EVL-PRINT`, `EVL-BLOCK-RESULT`.
+- [x] Specify declaration visibility, shadowing, evaluation order, function arity,
+      block results, closure capture, and recursion. Sections 6–7, `EVL-ORDER-*` and `BND-*`.
+- [x] Specify indexing, missing-key failures, equality, printing, and integer boundaries.
+      Section 5, `VAL-*`, and section 6.3, `EVL-DISPLAY-*`.
+- [x] Define each configuration mode and which errors it can downgrade or disable.
+      Section 9, `MOD-*`. `MOD-SEVERITY-ONLY` is asserted through warning fixtures,
+      not only through outcomes, because a warned-about program still runs.
+- [x] State which behaviors are intentionally unspecified; do not inherit Go behavior
+      accidentally. Section 10, `UNS-*`. `TestUnspecifiedEntriesAreNotRules` keeps
+      the list from acquiring fixtures, which would make it normative by accident.
 
 ### P2.2 — Record the proposed decisions
 
 These defaults make the plan actionable. Implement a changed rule only alongside
 its decision record, migration explanation, and affected tests.
+
+Every row below now has a record in [docs/decisions/](decisions/), indexed in
+[decisions/README.md](decisions/README.md), and every row that changes an existing
+program has a before-and-after section in [docs/MIGRATION.md](MIGRATION.md).
+`TestDecisionsAreLinked` checks that each record names rules the specification still
+declares, that every planned rule has a record, and that every migration a record
+promises is written. Writing the specification added two decisions the table does not
+have: D-11 (unary negation) and D-17 (inference), for the reasons the index gives.
 
 | Topic | Recommended target | Compatibility treatment / implementation phase |
 | --- | --- | --- |
@@ -421,17 +438,33 @@ must check boundaries explicitly. [Host arithmetic reference](https://go.dev/ref
 
 ### P2.3 — Build the conformance harness
 
-- [ ] Add `testdata/conformance/` fixtures with source, required phase, configuration,
-      expected output/value, error code, and source span.
-- [ ] Run each current-language fixture against interpreter and VM. Run representative
+The fixture format is defined in `internal/conformance`; the harness is
+`conformance_test.go`. A fixture is an ordinary Flux file whose leading `//!`
+comments declare what it requires, so the file the parser reads is the file a
+reader reads.
+
+- [x] Add `testdata/conformance/` fixtures with source, required phase, configuration,
+      expected output/value, error code, and source span. 101 fixtures across eight
+      sections; a span is required for every declared failure.
+- [x] Run each current-language fixture against interpreter and VM. Run representative
       fixtures through the real standalone compiler as well.
-- [ ] Store future examples separately with explicit milestone metadata; do not silently
-      skip arbitrary failing tests or mark unsupported syntax as implemented.
-- [ ] Give runtime-error fixtures a mode where they reach execution despite static checks.
-- [ ] Add paired examples for ambiguous cases: shadowing, function comparisons, empty
+      `TestConformanceStandaloneExecutables` builds nine of them into real executables
+      and checks the position each reports after the source is no longer consulted.
+- [x] Store future examples separately with explicit milestone metadata; do not silently
+      skip arbitrary failing tests or mark unsupported syntax as implemented. A planned
+      fixture declares both what its rule requires and what Flux does today, and is run
+      exactly like an implemented one; `TestPlannedRulesStillDifferFromTheSpecification`
+      fails when the two converge, so a rule cannot become "done" without being promoted.
+- [x] Give runtime-error fixtures a mode where they reach execution despite static checks.
+      `TestConformanceCoversDiagnosticCodes` requires a fixture for every registered code,
+      which is only satisfiable for the `R_` group by reaching execution under warn-only
+      or disabled checking. Two codes are exempt with recorded reasons.
+- [x] Add paired examples for ambiguous cases: shadowing, function comparisons, empty
       collections, duplicate keys, top-level output, and block result selection.
-- [ ] Maintain both expected-result assertions and backend parity assertions. Agreement
+- [x] Maintain both expected-result assertions and backend parity assertions. Agreement
       between two implementations alone is not proof of correct semantics.
+      `TestConformanceBackendParity` compares the engines to each other separately from
+      the declared outcomes, and reports a disagreement as its own failure.
 
 Lexical resolution is a semantic decision, not just an optimization. The resolver
 must identify the intended declaration before evaluation so closure behavior cannot
@@ -439,11 +472,13 @@ change with unrelated environment mutations. [Binding reference](https://raw.git
 
 ### Phase 2 completion criteria
 
-- [ ] Each row above has a decision record, examples, and an assigned implementation slice.
-- [ ] Existing conformance fixtures pass; future ones are clearly labeled as specifications.
-- [ ] No unresolved decision blocks arithmetic, block parsing, recursion, or type-mode work.
-- [ ] Breaking differences have concise before/after migration examples.
-- [ ] The README describes the implemented subset without promising future features.
+- [x] Each row above has a decision record, examples, and an assigned implementation slice.
+- [x] Existing conformance fixtures pass; future ones are clearly labeled as specifications.
+- [x] No unresolved decision blocks arithmetic, block parsing, recursion, or type-mode work.
+      D-09 to D-13 settle arithmetic and equality, D-02 blocks, D-08 recursion, and D-17
+      the inference behavior Phase 4 depends on.
+- [x] Breaking differences have concise before/after migration examples.
+- [x] The README describes the implemented subset without promising future features.
 
 ## 7. Phase 3 — Core expressions, lexical scopes, and recursive functions
 

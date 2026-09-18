@@ -131,6 +131,20 @@ is expected to do in each type-checking mode; `fixtures_test.go` runs each one i
 all four modes on both backends and fails on any example the manifest does not
 declare. A fixture's kind is derived from its outcomes, never from its filename.
 
+`internal/conformance` reads the leading `//!` directives in
+`testdata/conformance/`. `all:` sets the current outcome for every checking mode;
+later `strict:`, `lenient:`, `warn-only:` or `disabled:` directives override one
+mode. A planned fixture uses `specified:` for the future default and
+`specified-<mode>:` for exceptions. For example, a type error can be a static
+failure in strict/lenient modes and a runtime failure in warn-only/disabled
+modes. Every current and future mode must have an outcome.
+
+`stdout:` and `specified-stdout:` declare output from modes that execute,
+including anything printed before a runtime failure. Static rejection always
+expects empty output. Successful outcomes require an explicit output declaration;
+error outcomes default to empty output when it is omitted. Diagnostic coverage
+counts only current outcomes and declared warnings, never future requirements.
+
 `render/render_test.go` covers caret alignment against expanded tabs, stable
 no-colour output, multi-line spans, call traces, and the JSON shape.
 `docs_test.go` regenerates [DIAGNOSTICS.md](DIAGNOSTICS.md) from the code
@@ -156,6 +170,7 @@ or extend the embedding/build step if the VM is split into multiple files.
 - Arithmetic supports `+` and `-`; comparisons support `==`, `<`, and `>`.
   Parentheses control grouping. Multiplication, division, unary negation, logical
   operators, loops, assignment, imports and explicit `return` are not implemented.
+  [SPEC.md](SPEC.md) is the full account; this section is the summary.
 - Lists and dictionaries are homogeneous when checking is enabled. Dictionary
   keys are integers, strings, or booleans. Duplicate keys keep the last value.
 - Lenient mode permits truthy conditions, differing branch types and unlike-type
@@ -174,12 +189,20 @@ or extend the embedding/build step if the VM is split into multiple files.
 
 ## Next development priorities
 
-1. Complete Phase 2 of [the development plan](PLAN.md): an executable language
-   specification and recorded semantic decisions.
-2. Implement Phase 3's core expressions, local bindings, lexical closures, and
-   typed recursion in both backends with shared behavioral tests.
-3. Add Phase 4's constraint inference, type schemes, and precise checking-mode
-   rules, including strict mode for unannotated functions.
+Phase 2 is complete: [the specification](SPEC.md), the
+[decision records](decisions/), the [migration notes](MIGRATION.md), and the
+conformance suite under `testdata/conformance/` landed together. Every rule in
+the specification has at least one fixture that runs on both engines, and the
+rules a later phase changes have fixtures that assert today's behavior and fail
+if it silently starts matching the rule.
+
+1. Implement Phase 3 against the fixtures that already describe it. The planned
+   rules are listed in [SPEC.md](SPEC.md) with a `(phase 3)` marker, and each has
+   a decision record naming the slice that carries it.
+2. Add Phase 4's constraint inference, type schemes, and precise checking-mode
+   rules, including strict mode for unannotated functions. See
+   [D-17](decisions/inference.md) for what `UnknownType` has to be replaced with
+   and why.
 4. Exercise release automation in GitHub. The workflow now accepts explicitly
    created release versions, grants release write permissions, fetches history for
    changelogs, and lets the release action create the tag. Remote publishing still

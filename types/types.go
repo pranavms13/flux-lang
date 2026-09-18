@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/pranavms13/flux-lang/ast"
+	"github.com/pranavms13/flux-lang/diagnostic"
+	"github.com/pranavms13/flux-lang/source"
 )
 
 // FluxType represents a type in the Flux language
@@ -63,9 +65,30 @@ func (t DictType) Equals(other FluxType) bool {
 	return false
 }
 
+// ParamInfo records where a parameter was declared, so that a diagnostic about
+// an argument can point back at the parameter it disagrees with.
+//
+// It is provenance, not part of the type: [FunctionType.Equals] ignores it, and
+// it is empty for a built-in or for a function type that came from an
+// annotation rather than from a function literal.
+type ParamInfo struct {
+	Name string
+	Span source.Span
+}
+
 type FunctionType struct {
 	ParamTypes []FluxType
 	ReturnType FluxType
+	Params     []ParamInfo
+}
+
+// Param returns the declaration of the i-th parameter, and false when the
+// function's type carries no record of where its parameters were written.
+func (t FunctionType) Param(i int) (ParamInfo, bool) {
+	if i < 0 || i >= len(t.Params) {
+		return ParamInfo{}, false
+	}
+	return t.Params[i], t.Params[i].Span.IsValid()
 }
 
 func (t FunctionType) String() string {
@@ -141,10 +164,14 @@ func (env *TypeEnv) Lookup(name string) (FluxType, bool) {
 
 // Type checker
 type TypeChecker struct {
-	env      *TypeEnv
-	errors   []string
-	warnings []string
-	config   TypeCheckingMode
+	env         *TypeEnv
+	diagnostics diagnostic.Bag
+	config      TypeCheckingMode
+	// source and sourceID locate the diagnostics. They are unset for a checker
+	// built without a source, in which case diagnostics carry codes and
+	// messages but no location.
+	source   *source.Source
+	sourceID source.SourceID
 }
 
 // TypeCheckingMode controls how strict the type checker is
@@ -162,6 +189,8 @@ func NewTypeChecker() *TypeChecker {
 	})
 }
 
+// NewTypeCheckerWithConfig creates an isolated checker with the selected mode
+// and the built-in print signature.
 func NewTypeCheckerWithConfig(mode TypeCheckingMode) *TypeChecker {
 	env := NewTypeEnv(nil)
 
@@ -171,40 +200,16 @@ func NewTypeCheckerWithConfig(mode TypeCheckingMode) *TypeChecker {
 		ReturnType: VoidType{},
 	})
 
-	return &TypeChecker{
-		env:      env,
-		errors:   []string{},
-		warnings: []string{},
-		config:   mode,
-	}
+	return &TypeChecker{env: env, config: mode}
 }
 
-func (tc *TypeChecker) Error(msg string) {
-	if tc.config.WarnOnly {
-		tc.warnings = append(tc.warnings, msg)
-	} else {
-		tc.errors = append(tc.errors, msg)
-	}
-}
-
-func (tc *TypeChecker) Warning(msg string) {
-	tc.warnings = append(tc.warnings, msg)
-}
-
-func (tc *TypeChecker) GetErrors() []string {
-	return tc.errors
-}
-
-func (tc *TypeChecker) GetWarnings() []string {
-	return tc.warnings
-}
-
-func (tc *TypeChecker) HasErrors() bool {
-	return len(tc.errors) > 0
-}
-
-func (tc *TypeChecker) HasWarnings() bool {
-	return len(tc.warnings) > 0
+// NewTypeCheckerForSource returns a checker whose diagnostics are located in
+// src. The nodes it is given must have been parsed from that snapshot.
+func NewTypeCheckerForSource(src *source.Source, mode TypeCheckingMode) *TypeChecker {
+	tc := NewTypeCheckerWithConfig(mode)
+	tc.source = src
+	tc.sourceID = src.ID()
+	return tc
 }
 
 // Type checking methods
@@ -217,6 +222,8 @@ func (tc *TypeChecker) CheckProgram(prog *ast.Program) {
 	}
 }
 
+// CheckStatement checks an expression or validates a binding against its
+// annotation before storing its type.
 func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 	if stmt.Let != nil {
 		exprType := tc.CheckExpr(stmt.Let.Expr)
@@ -225,16 +232,18 @@ func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 		if stmt.Let.TypeAnno != nil {
 			annotatedType, err := ConvertASTType(stmt.Let.TypeAnno.Type)
 			if err != nil {
-				tc.Error(fmt.Sprintf("invalid type annotation: %v", err))
+				tc.errorAt(always, CodeInvalidAnnotation, stmt.Let.TypeAnno, "invalid type annotation: %v", err)
 				return
 			}
 
-			// Check if the expression type matches the annotation
+			// The mistake is in the value, so that is where the diagnostic
+			// points; the annotation it disagrees with is attached to it.
 			if !TypesEqual(exprType, annotatedType) {
-				msg := fmt.Sprintf("type mismatch: variable %s declared as %s but assigned %s",
+				tc.reportWithRelated(always, CodeAnnotationMismatch, stmt.Let.Expr,
+					tc.span(stmt.Let.TypeAnno), "%s is declared as %s here",
+					[]any{stmt.Let.Name, annotatedType.String()},
+					"type mismatch: variable %s declared as %s but assigned %s",
 					stmt.Let.Name, annotatedType.String(), exprType.String())
-
-				tc.Error(msg)
 			}
 
 			// Use the annotated type for binding
@@ -248,6 +257,8 @@ func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 	}
 }
 
+// CheckExpr returns an expression type and records diagnostics for invalid
+// constructs.
 func (tc *TypeChecker) CheckExpr(expr *ast.Expr) FluxType {
 	switch {
 	case expr.If != nil:
@@ -261,58 +272,83 @@ func (tc *TypeChecker) CheckExpr(expr *ast.Expr) FluxType {
 	case expr.Func != nil:
 		return tc.CheckFuncExpr(expr.Func)
 	default:
-		tc.Error("unknown expression type")
+		tc.report(always, diagnostic.Internal(tc.span(expr), "expression matched no grammar alternative"))
 		return VoidType{}
 	}
 }
 
+// CheckIfExpr checks the condition and branch types, applying the configured
+// tolerance for non-boolean conditions and differing branches.
 func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	condType := tc.CheckExpr(ifExpr.Cond)
 	if !TypesEqual(condType, BoolType{}) && !isUnknown(condType) {
-		msg := fmt.Sprintf("if condition must be bool, got %s", condType.String())
-		if tc.config.Strict {
-			tc.Error(msg)
-		} else {
-			tc.Warning(msg + " (treating as truthy)")
+		d := diagnostic.Error(CodeConditionType, tc.span(ifExpr.Cond),
+			"if condition must be bool, got %s", condType.String())
+		if !tc.config.Strict {
+			d = d.WithNote("treating as truthy")
 		}
+		tc.report(strictOnly, d)
 	}
 
 	thenType := tc.CheckExpr(ifExpr.ThenExpr)
 	elseType := tc.CheckExpr(ifExpr.ElseExpr)
 
 	if !TypesEqual(thenType, elseType) && !isUnknown(thenType) && !isUnknown(elseType) {
-		msg := fmt.Sprintf("if branches must have same type: then=%s, else=%s",
+		// The else branch is where the disagreement is noticed, and the then
+		// branch is what it disagrees with.
+		d := diagnostic.Error(CodeBranchMismatch, tc.span(ifExpr.ElseExpr),
+			"if branches must have same type: then=%s, else=%s",
 			thenType.String(), elseType.String())
-
-		if tc.config.Strict {
-			tc.Error(msg)
-			return VoidType{}
-		} else {
-			tc.Warning(msg + " (using unknown type)")
-			return UnknownType{}
+		if span := tc.span(ifExpr.ThenExpr); span.IsValid() {
+			d = d.WithRelated(span, "the then branch produces %s", thenType.String())
 		}
+		if tc.config.Strict {
+			tc.report(strictOnly, d)
+			return VoidType{}
+		}
+		// Outside strict mode the result is unknown rather than void, which is
+		// existing inference behavior that Phase 4 revisits.
+		tc.report(strictOnly, d.WithNote("using unknown type"))
+		return UnknownType{}
 	}
 
 	return thenType
 }
 
+// CheckBinaryExpr checks a comparison chain while retaining spans for both
+// operands of each operation.
 func (tc *TypeChecker) CheckBinaryExpr(expr *ast.Binary) FluxType {
 	result := tc.checkAdditive(expr.Left)
+	leftSpan := tc.span(expr.Left)
 	for _, rest := range expr.Rest {
-		result = tc.checkOperator(rest.Operator, result, tc.checkAdditive(rest.Right))
+		right := tc.checkAdditive(rest.Right)
+		result = tc.checkOperator(rest.Operator, result, right,
+			tc.span(rest), leftSpan, tc.span(rest.Right))
+		leftSpan = leftSpan.Union(tc.span(rest))
 	}
 	return result
 }
 
+// checkAdditive checks addition and subtraction left to right, retaining the
+// accumulated left operand span.
 func (tc *TypeChecker) checkAdditive(expr *ast.Additive) FluxType {
 	result := tc.CheckPrimaryExpr(expr.Left)
+	leftSpan := tc.span(expr.Left)
 	for _, rest := range expr.Rest {
-		result = tc.checkOperator(rest.Operator, result, tc.CheckPrimaryExpr(rest.Right))
+		right := tc.CheckPrimaryExpr(rest.Right)
+		result = tc.checkOperator(rest.Operator, result, right,
+			tc.span(rest), leftSpan, tc.span(rest.Right))
+		leftSpan = leftSpan.Union(tc.span(rest))
 	}
 	return result
 }
 
-func (tc *TypeChecker) checkOperator(operator string, left, right FluxType) FluxType {
+// checkOperator reports on an operator application. opSpan covers the operator
+// and its right operand, which is where the node begins; leftSpan covers
+// everything the operator is applied to on the left, so that a diagnostic can
+// name both operands.
+func (tc *TypeChecker) checkOperator(operator string, left, right FluxType,
+	opSpan, leftSpan, rightSpan source.Span) FluxType {
 	switch operator {
 	case "+":
 		if isUnknown(left) && isUnknown(right) {
@@ -333,16 +369,24 @@ func (tc *TypeChecker) checkOperator(operator string, left, right FluxType) Flux
 		}
 	case "==":
 		if !TypesEqual(left, right) {
-			msg := fmt.Sprintf("cannot compare different types: %s and %s", left.String(), right.String())
-			if tc.config.Strict {
-				tc.Error(msg)
-			} else {
-				tc.Warning(msg + " (allowing comparison)")
+			d := diagnostic.Error(CodeComparisonMismatch, leftSpan.Union(opSpan),
+				"cannot compare different types: %s and %s", left.String(), right.String())
+			if rightSpan.IsValid() {
+				d = d.WithRelated(rightSpan, "this operand is %s", right.String())
 			}
+			if !tc.config.Strict {
+				d = d.WithNote("allowing comparison")
+			}
+			tc.report(strictOnly, d)
 		}
 		return BoolType{}
 	}
-	tc.Error(fmt.Sprintf("invalid operands for %s: %s and %s", operator, left.String(), right.String()))
+	d := diagnostic.Error(CodeOperandType, leftSpan.Union(opSpan),
+		"invalid operands for %s: %s and %s", operator, left.String(), right.String())
+	if rightSpan.IsValid() {
+		d = d.WithRelated(rightSpan, "this operand is %s", right.String())
+	}
+	tc.report(always, d)
 	return UnknownType{}
 }
 
@@ -354,6 +398,8 @@ func (tc *TypeChecker) CheckBlockExpr(blockExpr *ast.BlockExpr) FluxType {
 	return lastType
 }
 
+// CheckPrimaryExpr checks a base and its postfix operations, extending the
+// callee or indexed-value span at each step.
 func (tc *TypeChecker) CheckPrimaryExpr(primary *ast.PrimaryExpr) FluxType {
 	var baseType FluxType
 
@@ -361,19 +407,25 @@ func (tc *TypeChecker) CheckPrimaryExpr(primary *ast.PrimaryExpr) FluxType {
 		baseType = tc.CheckBaseExpr(primary.Base)
 	}
 
-	// Apply postfixes
+	// Apply postfixes. The span of what is being called or indexed grows with
+	// each one, so that a diagnostic points at the whole callee rather than at
+	// the identifier that started it.
 	currentType := baseType
+	currentSpan := tc.span(primary.Base)
 	for _, postfix := range primary.Postfix {
 		if postfix.Call != nil {
-			currentType = tc.CheckCallExpr(currentType, postfix.Call)
+			currentType = tc.CheckCallExpr(currentType, currentSpan, postfix.Call)
 		} else if postfix.Index != nil {
-			currentType = tc.CheckIndexExpr(currentType, postfix.Index)
+			currentType = tc.CheckIndexExpr(currentType, currentSpan, postfix.Index)
 		}
+		currentSpan = currentSpan.Union(tc.span(postfix))
 	}
 
 	return currentType
 }
 
+// CheckBaseExpr checks the term, group, block, or collection underlying a
+// primary expression.
 func (tc *TypeChecker) CheckBaseExpr(base *ast.BaseExpr) FluxType {
 	if base.Term != nil {
 		return tc.CheckTerm(base.Term)
@@ -387,10 +439,12 @@ func (tc *TypeChecker) CheckBaseExpr(base *ast.BaseExpr) FluxType {
 		return tc.CheckDictExpr(base.Dict)
 	}
 
-	tc.Error("unknown base expression")
+	tc.report(always, diagnostic.Internal(tc.span(base), "base expression matched no grammar alternative"))
 	return VoidType{}
 }
 
+// CheckTerm returns a literal or bound name type, reporting unknown names at
+// their use.
 func (tc *TypeChecker) CheckTerm(term *ast.Term) FluxType {
 	if term.Number != nil {
 		return IntType{}
@@ -402,14 +456,16 @@ func (tc *TypeChecker) CheckTerm(term *ast.Term) FluxType {
 		if t, ok := tc.env.Lookup(*term.Ident); ok {
 			return t
 		}
-		tc.Error(fmt.Sprintf("undefined variable: %s", *term.Ident))
+		tc.errorAt(always, CodeUndefinedVariable, term, "undefined variable: %s", *term.Ident)
 		return VoidType{}
 	}
 
-	tc.Error("unknown term")
+	tc.report(always, diagnostic.Internal(tc.span(term), "term matched no grammar alternative"))
 	return VoidType{}
 }
 
+// CheckListExpr checks each element against the first and returns an unknown
+// element type for an empty list.
 func (tc *TypeChecker) CheckListExpr(list *ast.ListExpr) FluxType {
 	if len(list.Elems) == 0 {
 		// Empty list - we'll infer the type later or use a generic type
@@ -420,43 +476,52 @@ func (tc *TypeChecker) CheckListExpr(list *ast.ListExpr) FluxType {
 	for i, elem := range list.Elems[1:] {
 		t := tc.CheckExpr(elem)
 		if !TypesEqual(t, elemType) {
-			tc.Error(fmt.Sprintf("list element %d has type %s, expected %s",
-				i+1, t.String(), elemType.String()))
+			tc.reportWithRelated(always, CodeListElementType, elem,
+				tc.span(list.Elems[0]), "the first element is %s", []any{elemType.String()},
+				"list element %d has type %s, expected %s", i+2, t.String(), elemType.String())
 		}
 	}
 
 	return ListType{ElementType: elemType}
 }
 
+// CheckDictExpr validates dictionary keys and checks later key and value types
+// against the first pair.
 func (tc *TypeChecker) CheckDictExpr(dict *ast.DictExpr) FluxType {
 	if len(dict.Pairs) == 0 {
 		// Empty dictionary
 		return DictType{KeyType: UnknownType{}, ValueType: UnknownType{}}
 	}
 
-	keyType := tc.CheckExpr(dict.Pairs[0].Key)
-	tc.checkDictionaryKey(keyType)
-	valueType := tc.CheckExpr(dict.Pairs[0].Value)
+	first := dict.Pairs[0]
+	keyType := tc.CheckExpr(first.Key)
+	tc.checkDictionaryKey(keyType, first.Key)
+	valueType := tc.CheckExpr(first.Value)
 
 	for i, pair := range dict.Pairs[1:] {
 		kt := tc.CheckExpr(pair.Key)
-		tc.checkDictionaryKey(kt)
+		tc.checkDictionaryKey(kt, pair.Key)
 		vt := tc.CheckExpr(pair.Value)
 
 		if !TypesEqual(kt, keyType) {
-			tc.Error(fmt.Sprintf("dictionary key %d has type %s, expected %s",
-				i+1, kt.String(), keyType.String()))
+			tc.reportWithRelated(always, CodeDictKeyType, pair.Key,
+				tc.span(first.Key), "the first key is %s", []any{keyType.String()},
+				"dictionary key %d has type %s, expected %s", i+2, kt.String(), keyType.String())
 		}
 		if !TypesEqual(vt, valueType) {
-			tc.Error(fmt.Sprintf("dictionary value %d has type %s, expected %s",
-				i+1, vt.String(), valueType.String()))
+			tc.reportWithRelated(always, CodeDictValueType, pair.Value,
+				tc.span(first.Value), "the first value is %s", []any{valueType.String()},
+				"dictionary value %d has type %s, expected %s", i+2, vt.String(), valueType.String())
 		}
 	}
 
 	return DictType{KeyType: keyType, ValueType: valueType}
 }
 
-func (tc *TypeChecker) CheckCallExpr(fnType FluxType, call *ast.CallExpr) FluxType {
+// CheckCallExpr checks a call. calleeSpan covers the expression being called,
+// which is what an arity or callability diagnostic points at; an argument
+// mismatch points at the argument instead.
+func (tc *TypeChecker) CheckCallExpr(fnType FluxType, calleeSpan source.Span, call *ast.CallExpr) FluxType {
 	if isUnknown(fnType) {
 		for _, arg := range call.Args {
 			tc.CheckExpr(arg)
@@ -465,13 +530,18 @@ func (tc *TypeChecker) CheckCallExpr(fnType FluxType, call *ast.CallExpr) FluxTy
 	}
 	funcType, ok := fnType.(FunctionType)
 	if !ok {
-		tc.Error(fmt.Sprintf("cannot call non-function type: %s", fnType.String()))
+		tc.report(always, diagnostic.Error(CodeNotCallable, calleeSpan,
+			"cannot call non-function type: %s", fnType.String()))
 		return VoidType{}
 	}
 
 	if len(call.Args) != len(funcType.ParamTypes) {
-		tc.Error(fmt.Sprintf("function expects %d arguments, got %d",
-			len(funcType.ParamTypes), len(call.Args)))
+		d := diagnostic.Error(CodeArgumentCount, tc.span(call),
+			"function expects %d arguments, got %d", len(funcType.ParamTypes), len(call.Args))
+		if calleeSpan.IsValid() {
+			d = d.WithRelated(calleeSpan, "this is %s", funcType.String())
+		}
+		tc.report(always, d)
 		return funcType.ReturnType
 	}
 
@@ -482,8 +552,7 @@ func (tc *TypeChecker) CheckCallExpr(fnType FluxType, call *ast.CallExpr) FluxTy
 		// Allow unknown types to be compatible
 		if !isUnknown(expectedType) && !isUnknown(argType) {
 			if !TypesEqual(argType, expectedType) {
-				tc.Error(fmt.Sprintf("argument %d has type %s, expected %s",
-					i, argType.String(), expectedType.String()))
+				tc.reportArgumentMismatch(funcType, i, arg, argType, expectedType)
 			}
 		}
 	}
@@ -491,7 +560,22 @@ func (tc *TypeChecker) CheckCallExpr(fnType FluxType, call *ast.CallExpr) FluxTy
 	return funcType.ReturnType
 }
 
-func (tc *TypeChecker) CheckIndexExpr(baseType FluxType, index *ast.IndexExpr) FluxType {
+// reportArgumentMismatch points at the argument and attaches the parameter it
+// disagrees with, which is the pair a reader needs in order to decide which of
+// the two is wrong.
+func (tc *TypeChecker) reportArgumentMismatch(funcType FunctionType, i int, arg *ast.Expr, argType, expectedType FluxType) {
+	// Arguments are numbered from one, the way a person counts them.
+	d := diagnostic.Error(CodeArgumentType, tc.span(arg),
+		"argument %d has type %s, expected %s", i+1, argType.String(), expectedType.String())
+	if param, ok := funcType.Param(i); ok {
+		d = d.WithRelated(param.Span, "parameter %q is declared as %s here",
+			param.Name, expectedType.String())
+	}
+	tc.report(always, d)
+}
+
+// CheckIndexExpr checks an index. baseSpan covers the collection being indexed.
+func (tc *TypeChecker) CheckIndexExpr(baseType FluxType, baseSpan source.Span, index *ast.IndexExpr) FluxType {
 	indexType := tc.CheckExpr(index.Index)
 
 	switch bt := baseType.(type) {
@@ -499,22 +583,26 @@ func (tc *TypeChecker) CheckIndexExpr(baseType FluxType, index *ast.IndexExpr) F
 		return UnknownType{}
 	case ListType:
 		if !TypesEqual(indexType, IntType{}) {
-			tc.Error(fmt.Sprintf("list index must be int, got %s", indexType.String()))
+			tc.errorAt(always, CodeIndexType, index.Index,
+				"list index must be int, got %s", indexType.String())
 		}
 		return bt.ElementType
 	case DictType:
-		tc.checkDictionaryKey(indexType)
+		tc.checkDictionaryKey(indexType, index.Index)
 		if !TypesEqual(indexType, bt.KeyType) {
-			tc.Error(fmt.Sprintf("dictionary key must be %s, got %s",
-				bt.KeyType.String(), indexType.String()))
+			tc.errorAt(always, CodeIndexType, index.Index,
+				"dictionary key must be %s, got %s", bt.KeyType.String(), indexType.String())
 		}
 		return bt.ValueType
 	default:
-		tc.Error(fmt.Sprintf("cannot index into type: %s", baseType.String()))
+		tc.report(always, diagnostic.Error(CodeNotIndexable, baseSpan,
+			"cannot index into type: %s", baseType.String()))
 		return VoidType{}
 	}
 }
 
+// CheckFuncExpr checks parameters and the body in a nested scope, validates
+// annotations, and retains parameter locations for call diagnostics.
 func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 	// Create new scope for function parameters
 	funcEnv := NewTypeEnv(tc.env)
@@ -523,19 +611,27 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 
 	// Process parameters with type annotations
 	paramTypes := make([]FluxType, len(funcExpr.Params))
-	seen := map[string]bool{}
+	params := make([]ParamInfo, len(funcExpr.Params))
+	declaredAt := map[string]*ast.FuncParam{}
 	for i, param := range funcExpr.Params {
-		if seen[param.Name] {
-			tc.Error("duplicate parameter: " + param.Name)
+		if first, repeated := declaredAt[param.Name]; repeated {
+			d := diagnostic.Error(CodeDuplicateParameter, tc.span(param),
+				"duplicate parameter: %s", param.Name)
+			if span := tc.span(first); span.IsValid() {
+				d = d.WithRelated(span, "%s is already declared here", param.Name)
+			}
+			tc.report(always, d)
+		} else {
+			declaredAt[param.Name] = param
 		}
-		seen[param.Name] = true
 		var paramType FluxType
 
 		if param.TypeAnno != nil {
 			// Use explicit type annotation
 			annotatedType, err := ConvertASTType(param.TypeAnno.Type)
 			if err != nil {
-				tc.Error(fmt.Sprintf("invalid type annotation for parameter %s: %v", param.Name, err))
+				tc.errorAt(always, CodeInvalidAnnotation, param.TypeAnno,
+					"invalid type annotation for parameter %s: %v", param.Name, err)
 				paramType = UnknownType{} // fallback
 			} else {
 				paramType = annotatedType
@@ -546,6 +642,7 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 		}
 
 		paramTypes[i] = paramType
+		params[i] = ParamInfo{Name: param.Name, Span: tc.span(param)}
 		tc.env.Bind(param.Name, paramType)
 	}
 
@@ -557,13 +654,17 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 	if funcExpr.ReturnAnno != nil {
 		annotatedReturnType, err := ConvertASTType(funcExpr.ReturnAnno.Type)
 		if err != nil {
-			tc.Error(fmt.Sprintf("invalid return type annotation: %v", err))
+			tc.errorAt(always, CodeInvalidAnnotation, funcExpr.ReturnAnno,
+				"invalid return type annotation: %v", err)
 			returnType = bodyType // use inferred type
 		} else {
-			// Check if body type matches return annotation
+			// The body is what has the wrong type, so it is where this points.
 			if !isUnknown(bodyType) && !TypesEqual(bodyType, annotatedReturnType) {
-				tc.Error(fmt.Sprintf("return type mismatch: declared %s but body returns %s",
-					annotatedReturnType.String(), bodyType.String()))
+				tc.reportWithRelated(always, CodeReturnMismatch, funcExpr.Body,
+					tc.span(funcExpr.ReturnAnno), "the return type is declared %s here",
+					[]any{annotatedReturnType.String()},
+					"return type mismatch: declared %s but body returns %s",
+					annotatedReturnType.String(), bodyType.String())
 			}
 			returnType = annotatedReturnType
 		}
@@ -578,13 +679,17 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 	return FunctionType{
 		ParamTypes: paramTypes,
 		ReturnType: returnType,
+		Params:     params,
 	}
 }
 
-func (tc *TypeChecker) checkDictionaryKey(t FluxType) {
+// checkDictionaryKey rejects concrete key types other than int, string, and
+// bool, leaving unknown types for later checking.
+func (tc *TypeChecker) checkDictionaryKey(t FluxType, at ast.Positioned) {
 	switch t.(type) {
 	case IntType, StringType, BoolType, UnknownType:
 	default:
-		tc.Error(fmt.Sprintf("dictionary key must be int, string, or bool, got %s", t.String()))
+		tc.errorAt(always, CodeInvalidDictKey, at,
+			"dictionary key must be int, string, or bool, got %s", t.String())
 	}
 }

@@ -110,12 +110,18 @@ Delivery rules for every implementation slice:
 
 ### Baseline preparation
 
-- [ ] Review and checkpoint the existing stabilization changes as their own change set.
-- [ ] Record the exact commit and local toolchains used for the next implementation.
-- [ ] Run the existing suite and retain the intentionally invalid `type_errors.flux` fixture.
-- [ ] Record parser/checker/VM benchmarks for representative small, nested, and large programs.
-- [ ] Add a fixture manifest that distinguishes valid programs, static errors, runtime errors,
+- [x] Review and checkpoint the existing stabilization changes as their own change set.
+      They landed in `503377e`; see [docs/BASELINE.md](BASELINE.md).
+- [x] Record the exact commit and local toolchains used for the next implementation.
+- [x] Run the existing suite and retain the intentionally invalid `type_errors.flux` fixture.
+- [x] Record parser/checker/VM benchmarks for representative small, nested, and large programs.
+      `bench_test.go`; numbers in [docs/BASELINE.md](BASELINE.md). Parsing dominates the
+      pipeline by two to three orders of magnitude, and parsing nested conditionals costs
+      exponential time, which `BenchmarkParseNesting` records.
+- [x] Add a fixture manifest that distinguishes valid programs, static errors, runtime errors,
       and mode-dependent programs; never classify an example by filename alone.
+      `internal/fixtures`; a fixture's kind is derived from its declared per-mode outcomes,
+      and a file in `examples/` that the manifest does not declare fails the suite.
 
 ## 5. Phase 1 — Source positions and structured diagnostics
 
@@ -131,15 +137,24 @@ Proposed packages: `source/` and `diagnostic/`. Keep these independent of the AS
 Participle, type checker, and execution engines so the standalone build can include
 them without pulling in the front end.
 
-- [ ] Define a source identifier and immutable source snapshot with original bytes,
-      display filename, and line-start index.
-- [ ] Use half-open byte spans `[start, end)` as the canonical location representation.
-- [ ] Define conversions for terminal line/column and, later, negotiated LSP character units.
-- [ ] Define diagnostics with a stable code, severity, message, primary span, optional
+- [x] Define a source identifier and immutable source snapshot with original bytes,
+      display filename, and line-start index. `source.SourceID`, `source.Source`, and the
+      `source.Map` registry, which is safe for concurrent use.
+- [x] Use half-open byte spans `[start, end)` as the canonical location representation.
+      `source.Span`, with `Union` for composite expressions and `Compare` for ordering.
+- [x] Define conversions for terminal line/column and, later, negotiated LSP character units.
+      `source.Position` counts bytes, runes, UTF-16 code units, and tab-expanded display
+      cells separately; every field is 1-based, and the LSP adapter subtracts one.
+- [x] Define diagnostics with a stable code, severity, message, primary span, optional
       related locations, notes, and optional help. Keep terminal styling out of this model.
-- [ ] Reserve code groups for lexing/parsing, binding, typing, runtime, and internal failures.
-- [ ] Distinguish a source-less tool error, such as an unreadable file, from a language error.
-- [ ] Define deterministic ordering and suppression of downstream errors caused by one root failure.
+- [x] Reserve code groups for lexing/parsing, binding, typing, runtime, and internal failures.
+      `S_`, `B_`, `T_`, `R_`, and `X_`. `diagnostic.Register` declares a code with a
+      description and rejects an unknown group or a duplicate at init time.
+- [x] Distinguish a source-less tool error, such as an unreadable file, from a language error.
+      `diagnostic.ToolError` carries no span and is a distinct type.
+- [x] Define deterministic ordering and suppression of downstream errors caused by one root failure.
+      `diagnostic.Bag` deduplicates identical reports, orders by position then code then
+      arrival, and withholds diagnostics recorded with `AddCausedBy`.
 
 Suggested API shapes, to refine in implementation:
 
@@ -166,79 +181,151 @@ files, EOF, multiline spans, combining marks, and supplementary-plane characters
 Define terminal tab expansion explicitly; do not equate a byte offset with a
 terminal display column or LSP UTF-16 column.
 
+Implemented in `source/` and `diagnostic/`. `source/` has no internal dependencies,
+and `diagnostic/` depends only on `source/`, so the standalone build bundle can
+include both. Tab expansion is explicit: `source.DefaultTabWidth` is 8 and
+`PositionWithTabWidth` accepts another stop width. Display columns count one
+cell per non-tab rune and so do
+not account for double-width or zero-width characters; that limitation is
+documented on the field rather than hidden.
+
 ### P1.2 — Preserve positions through parsing
 
-- [ ] Add `ParseSource(filename, text)` or a source-snapshot equivalent; retain `Parse(text)`
-      as a compatibility wrapper for tests and embedded callers.
-- [ ] Populate positions on statements, declarations, annotations, parameters, terms,
-      operators, call arguments, indexes, and composite expressions.
-- [ ] Convert Participle positions at one boundary and verify end-position semantics
-      against the pinned version with token/EOF fixtures.
-- [ ] Extract lexical and syntax failures through their typed errors, not string matching.
-- [ ] Preserve a full file token stream once, including comments/trivia. Avoid copying
-      the entire nested token range into every AST node.
-- [ ] Define the result of a failed parse explicitly: diagnostics and optionally a partial
+- [x] Add `ParseSource(filename, text)` or a source-snapshot equivalent; retain `Parse(text)`
+      as a compatibility wrapper for tests and embedded callers. `parser.ParseSource` takes a
+      `*source.Source`; `parser.Parse` remains, and `main.go` now reports the real filename.
+- [x] Populate positions on statements, declarations, annotations, parameters, terms,
+      operators, call arguments, indexes, and composite expressions. Every node embeds
+      `ast.Node`, which Participle fills through the embedded struct.
+- [x] Convert Participle positions at one boundary and verify end-position semantics
+      against the pinned version with token/EOF fixtures. `ast.Node.Span` is the only
+      conversion; `TestEndPositionSemantics` pins `EndPos` as the exclusive end.
+- [x] Extract lexical and syntax failures through their typed errors, not string matching.
+      `*lexer.Error` and `*participle.UnexpectedTokenError` via `errors.As`. The expected-set
+      text is still recovered from the message, because Participle keeps it unexported.
+- [x] Preserve a full file token stream once, including comments/trivia. Avoid copying
+      the entire nested token range into every AST node. `Tokens` is declared on `ast.Program`
+      alone, and `TestOnlyTheRootCapturesTokens` fails if another node declares one.
+- [x] Define the result of a failed parse explicitly: diagnostics and optionally a partial
       syntax tree for tools; an erroneous tree must never be executed or compiled.
+      `parser.Result.Program` is nil whenever parsing failed; the partial tree is in a
+      separate `Partial` field that nothing executes.
 
 Participle's built-in position/token capture makes a parser replacement unnecessary
 for this step. Its partial-tree behavior still needs a Flux wrapper with a clear
 execution boundary. [Pinned parser documentation](https://raw.githubusercontent.com/alecthomas/participle/v2.1.4/README.md).
 
+Confirmed against the pinned version. Participle injects `Pos`/`EndPos` through an
+embedded struct, sets `EndPos` from the next raw token (so it is the exclusive
+end), and fills a `Tokens` field from that node's whole raw range, including
+elided tokens. The stream stops at the last consumed token; whatever follows is
+trivia by definition and is recovered from the source snapshot, so
+`parser.Result.TrailingTrivia` needs no second lexing pass. Positions cost
+roughly a sixth of parse time and a third of parse allocations; see
+[docs/BASELINE.md](BASELINE.md).
+
 ### P1.3 — Migrate type diagnostics
 
-- [ ] Replace `errors []string` and `warnings []string` with diagnostic records.
-- [ ] Pass the relevant node/span into each type-checking operation.
-- [ ] Point an argument mismatch at the argument; attach the parameter declaration as
+- [x] Replace `errors []string` and `warnings []string` with diagnostic records.
+      The checker holds a `diagnostic.Bag`.
+- [x] Pass the relevant node/span into each type-checking operation. `checkOperator`,
+      `CheckCallExpr`, `CheckIndexExpr` and `checkDictionaryKey` take spans; the rest
+      reach their node directly.
+- [x] Point an argument mismatch at the argument; attach the parameter declaration as
       related information. Do likewise for annotations and differing branch types.
-- [ ] Apply strict/warn-only policy to severity at one layer while preserving codes and spans.
-- [ ] Keep temporary string accessors only as adapters while migrating existing callers/tests.
-- [ ] Do not introduce new inference behavior in this slice.
+      `FunctionType.Params` carries parameter provenance so the label can be built; it is
+      empty for built-ins and for function types written as annotations, and the label is
+      then omitted rather than guessed.
+- [x] Apply strict/warn-only policy to severity at one layer while preserving codes and spans.
+      `TypeChecker.report` is the only place a mode changes a severity, and
+      `TestModesChangeSeverityAndNothingElse` checks that codes and spans are mode-independent.
+- [x] Keep temporary string accessors only as adapters while migrating existing callers/tests.
+      `GetErrors`/`GetWarnings` render from the bag and now include a position when the
+      checker was given a source.
+- [x] Do not introduce new inference behavior in this slice. The lenient/strict divergence in
+      what a mismatched conditional returns is preserved as-is for Phase 4.
 
 ### P1.4 — Return runtime failures and carry VM source maps
 
-- [ ] Change interpreter evaluation and VM execution to return explicit errors/results.
-- [ ] Replace ordinary language panics and unchecked assertions with validated operations.
-- [ ] Handle wrong arity, invalid operand types, missing keys, bad indexes, non-callables,
-      and undefined values through the same runtime error catalogue.
-- [ ] Represent call traces as data containing function labels and call-site locations.
-- [ ] Add a source map keyed by instruction-start byte offset to every compiled chunk,
-      including nested function chunks.
-- [ ] Capture the instruction start before reading operands, so failures point at the
+- [x] Change interpreter evaluation and VM execution to return explicit errors/results.
+      `runtime.Run` returns an error; `vm.Run` returns an error.
+- [x] Replace ordinary language panics and unchecked assertions with validated operations.
+      The VM's `need` checks stack depth before an instruction consumes it, and constant
+      indexes and types are validated; a shortfall is an internal defect, not a user error.
+- [x] Handle wrong arity, invalid operand types, missing keys, bad indexes, non-callables,
+      and undefined values through the same runtime error catalogue. `fault/`, imported by
+      both engines, so the two cannot drift apart on wording or codes.
+- [x] Represent call traces as data containing function labels and call-site locations.
+      `fault.Frame`, added as the failure unwinds so the innermost frame comes first.
+- [x] Add a source map keyed by instruction-start byte offset to every compiled chunk,
+      including nested function chunks. `vm.Chunk.Locations`; a nested function gets its
+      own map, so a failure inside it reports its own line rather than the call's.
+- [x] Capture the instruction start before reading operands, so failures point at the
       failing operation instead of a subsequent instruction.
-- [ ] Preserve function identity/location metadata when constructing closures.
-- [ ] Keep unexpected implementation failures distinguishable from expected user errors;
-      CLI recovery must not disguise an internal defect as a type mismatch.
-- [ ] Inject an `io.Writer` through execution options. Replace global `os.Stdout` swapping
+- [x] Preserve function identity/location metadata when constructing closures. A chunk
+      carries the name the function was bound to; a closure keeps its chunk.
+- [x] Keep unexpected implementation failures distinguishable from expected user errors;
+      CLI recovery must not disguise an internal defect as a type mismatch. Internal
+      failures carry `X_INTERNAL`, and the CLI's recover now reports a panic as a Flux bug.
+- [x] Inject an `io.Writer` through execution options. Replace global `os.Stdout` swapping
       in new tests and progressively migrate `internal/testutil/output.go` callers.
+      Every caller was migrated, so `internal/testutil` is removed rather than left dead.
 
 ### P1.5 — Preserve standalone builds while sharing diagnostics
 
 Adding a `diagnostic` import to `vm/vm.go` would break today's single-file packaging.
 Resolve that dependency before merging the runtime API change.
 
-- [ ] Replace package-name string rewriting with a small embedded source bundle containing
-      the VM and its explicitly listed runtime-only dependencies.
-- [ ] Materialize those packages and a minimal temporary `go.mod` under the same module
+Done ahead of schedule, because P1.4 could not land without it: the runtime API
+change required the VM to import `fault`, and the old packaging only worked while
+the VM imported nothing.
+
+- [x] Replace package-name string rewriting with a small embedded source bundle containing
+      the VM and its explicitly listed runtime-only dependencies. `bundledPackages` in
+      `main.go` lists `diagnostic`, `fault`, `source`, `vm`.
+- [x] Materialize those packages and a minimal temporary `go.mod` under the same module
       path; generate a main package that imports the bundled VM normally.
-- [ ] Exclude tests, parser/compiler sources, local workspace replacements, and accidental
+- [x] Exclude tests, parser/compiler sources, local workspace replacements, and accidental
       dependencies from the bundle. Keep bundle membership explicit and tested.
-- [ ] Build with workspace discovery disabled; verify dependency resolution with
+      `TestBuildBundleIsClosed` parses every bundled file's imports and rejects one that
+      names a package outside the bundle or any external module.
+- [x] Build with workspace discovery disabled; verify dependency resolution with
       `GOWORK=off` and `GOPROXY=off` using an already installed Go toolchain.
-- [ ] Give serialized chunks a format version and a deliberate gob registration scheme.
-- [ ] Store display filenames and precomputed line/column locations needed after the
+- [x] Give serialized chunks a format version and a deliberate gob registration scheme.
+      `vm.Program` wraps the chunk with `vm.ProgramFormatVersion`; `vm.Encode`/`vm.Decode`
+      own the registration, so the compiler and every generated executable use one scheme
+      and a mismatched format is refused with an instruction rather than a decode error.
+- [x] Store display filenames and precomputed line/column locations needed after the
       original source is removed. Never rely on an absolute development-machine path.
-- [ ] Define `compiler.debug` to optionally embed source text for snippets; retain useful
+      Done in P1.4: `source.Location` holds the display filename with the line and column
+      already resolved, and the CLI test deletes the source before running the executable.
+- [x] Define `compiler.debug` to optionally embed source text for snippets; retain useful
       codes, locations, and traces when source text is omitted. Document size/source disclosure.
-- [ ] Verify cleanup on compilation failure and successful execution from another directory.
+      `vm.Program.Sources`, filled only when `compiler.debug` is set. Without it the
+      executable still reports code, position, and trace; `TestCLI` asserts it embeds no
+      source, and `TestCompileDebugEmbedsSource` asserts the snippet comes from inside the
+      binary by deleting the file first.
+- [x] Verify cleanup on compilation failure and successful execution from another directory.
+      `TestCompilationFailureCleansUp` counts leftover build directories around a failed
+      compile; `TestCLI` runs the built executable from a different directory.
 
 ### P1.6 — Render and integrate
 
-- [ ] Add a plain-text renderer with optional terminal styling and stable no-color output.
-- [ ] Add a versioned JSON diagnostic representation for later CLI/editor reuse.
-- [ ] Keep diagnostics on stderr for execution; program output remains on stdout.
-- [ ] Define command exit behavior once and use it in the CLI and generated executable.
-      Proposed convention: `0` success, `1` language/check failure, `2` usage/tool/internal failure.
-- [ ] Add examples of diagnostics to the README and a diagnostic-code reference.
+- [x] Add a plain-text renderer with optional terminal styling and stable no-color output.
+      `render.Renderer`. Colour is off unless the destination is a terminal and always off
+      under `NO_COLOR`; a test asserts that styling changes no text, only how it is drawn.
+      Snippets expand tabs before drawing and measure the underline in the same columns.
+- [x] Add a versioned JSON diagnostic representation for later CLI/editor reuse.
+      `render.JSONVersion`; positions carry byte offsets and line/column together, because
+      neither can be derived from the other without the source.
+- [x] Keep diagnostics on stderr for execution; program output remains on stdout.
+      `TestCLI` captures the two streams separately and asserts each is what it should be.
+- [x] Define command exit behavior once and use it in the CLI and generated executable.
+      `diagnostic.ExitSuccess`/`ExitFailure`/`ExitToolFailure`. An internal defect exits 2,
+      not 1: it is not a failure of the user's program.
+- [x] Add examples of diagnostics to the README and a diagnostic-code reference.
+      [docs/DIAGNOSTICS.md](DIAGNOSTICS.md) is generated from the code registry, and a test
+      fails when it drifts.
 
 Target presentation, using illustrative wording and codes:
 
@@ -251,14 +338,37 @@ main.flux:4:5: error[T_ARGUMENT_TYPE]: expected int, found string
 
 ### Phase 1 completion criteria
 
-- [ ] Lexer, parser, checker, and ordinary runtime failures contain stable codes and locations.
-- [ ] Both backends and an actual generated executable agree on runtime error code and location.
-- [ ] A generated executable still reports a location after its source file is deleted.
-- [ ] Human and JSON outputs represent the same diagnostic data.
-- [ ] Existing successful outputs remain unchanged; error-text changes are intentionally updated.
-- [ ] Tests cover Unicode/CRLF positions, nested calls, failures after variable-length
+- [x] Lexer, parser, checker, and ordinary runtime failures contain stable codes and locations.
+      Thirty codes across five groups, listed in [docs/DIAGNOSTICS.md](DIAGNOSTICS.md).
+- [x] Both backends and an actual generated executable agree on runtime error code and location.
+      `TestRuntimeFailures` compares the two engines' codes, messages and spans rather than
+      their prose; `TestCLI` checks the built executable reports what the interpreter did.
+- [x] A generated executable still reports a location after its source file is deleted.
+      `TestCLI` deletes it first. With `compiler.debug` it prints the line too, which
+      `TestCompileDebugEmbedsSource` proves comes from inside the binary.
+- [x] Human and JSON outputs represent the same diagnostic data.
+      `TestTextAndJSONDescribeTheSameDiagnostic` renders one record both ways and checks
+      that everything the JSON asserts is findable in the text.
+- [x] Existing successful outputs remain unchanged; error-text changes are intentionally updated.
+      The only deliberate wording changes are the runtime catalogue, which now names types in
+      the language's vocabulary instead of Go's, and argument numbering, which counts from one.
+- [x] Tests cover Unicode/CRLF positions, nested calls, failures after variable-length
       instructions, debug-on/off artifacts, and errors in nested function chunks.
-- [ ] No new runtime import depends on a package missing from the embedded build bundle.
+      `TestFailureAfterVariableLengthInstructions` and `TestSourceMapIsKeyedAtInstructionStarts`
+      cover the third: the latter walks the bytecode and rejects a location keyed inside an
+      operand, which would look up successfully and report the wrong construct.
+- [x] No new runtime import depends on a package missing from the embedded build bundle.
+      `TestBuildBundleIsClosed` parses the bundled imports rather than waiting for a build to
+      fail on someone's machine.
+
+Phase 1 is complete. Two things it deliberately did not fix, for the phase that
+owns them:
+
+- The expected-token set in a syntax error is still recovered from Participle's
+  message text, because the library keeps the set unexported. Everything else
+  reads typed errors.
+- Lenient and strict modes still disagree about what a mismatched conditional
+  evaluates to. That is inference behavior, which Phase 4 settles.
 
 ## 6. Phase 2 — Language specification and semantic contracts
 

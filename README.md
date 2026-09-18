@@ -283,6 +283,58 @@ Type checking warnings:
 
 For more examples, look into [Examples](./examples). `type_errors.flux` is intentionally invalid; the other examples run with the default configuration.
 
+## Diagnostics
+
+Every source-related language diagnostic names the file, the line and the
+construct it is about, carries a stable code, and — where it helps — points at
+the declaration it disagrees with.
+
+A type error shows both halves of the disagreement, because knowing which of the
+two is wrong is the actual question:
+
+```text
+types.flux:2:11: error[T_ARGUMENT_TYPE]: argument 1 has type string, expected int
+2 | print(add("5", 10))
+  |           ^^^
+  = note: parameter "a" is declared as int here at types.flux:1:14
+```
+
+A failure while running says which calls led there:
+
+```text
+trace.flux:1:24: error[R_OPERAND_TYPE]: cannot apply + to int and string
+1 | let inner = fn(x) => x + "no"
+  |                        ^^^^^^
+  in inner, called at trace.flux:2:27
+  in outer, called at trace.flux:3:12
+```
+
+An unfinished construct is reported as one, rather than as an unexpected token
+that happens to be the end of the file:
+
+```text
+syntax.flux:2:1: error[S_UNEXPECTED_EOF]: unexpected end of input, expected Expr
+  = note: a construct started earlier in the file was never finished
+```
+
+Compiled executables report the same way. Their positions are resolved when the
+program is compiled, not looked up when it fails, so a built program still says
+`main.flux:2:9` after the `.flux` file is gone. Set `compiler.debug` in
+`flux.json` to embed the source as well, and the executable can show the
+offending line too — at the cost of a larger binary that contains your source.
+
+Diagnostics go to stderr and program output to stdout, so a pipeline reads one
+without the other. Commands exit `0` on success, `1` when a program is rejected
+or fails while running, and `2` when Flux could not do the job at all — bad
+usage, a missing file, or a bug in Flux.
+
+Colour is used only when writing to a terminal, and never when `NO_COLOR` is
+set, so redirected output is byte-stable.
+
+The code in brackets is the stable part; wording may improve, codes do not
+change meaning. They are listed in
+[the diagnostic reference](docs/DIAGNOSTICS.md).
+
 ## Configuration Examples
 
 See the `examples/` directory for configuration examples:
@@ -330,8 +382,57 @@ make build-all
 
 `+` and `-` associate left to right and bind more tightly than `==`, `<`, and `>`. Use parentheses to group expressions. `print(value)` outputs immediately and returns void.
 
+## Performance
+
+Reference numbers from `make bench` on an Apple M3 Pro (darwin/arm64, Go 1.25.1).
+They describe one machine at one commit, so treat them as a shape rather than a
+specification — the same machine varies by up to 30% between sessions. `small` is an ordinary seven-line script, `nested` is six levels
+of nested conditionals plus a closure, and `large` is 300 bindings with a
+300-element list.
+
+| Stage | small | nested | large |
+| --- | --- | --- | --- |
+| Parse | 254 µs | 2.49 ms | 6.40 ms |
+| Type check | 0.92 µs | 1.28 µs | 31.9 µs |
+| Compile | 1.21 µs | 1.41 µs | 36.2 µs |
+| Interpret | 0.92 µs | 0.87 µs | 31.2 µs |
+| VM | 1.14 µs | 1.19 µs | 24.1 µs |
+
+Two things are worth knowing before you read too much into these.
+
+**Parsing dominates.** For `small` and `large`, it costs roughly 52–61 times the
+other measured stages combined; for `nested`, roughly 524 times. Parsing a
+270-byte script takes 254 µs, checking it takes under 1 µs, and running it takes
+about the same. If a Flux program feels slow to start, the parser is why.
+
+**Nested conditionals parse in exponential time.** The parser uses unbounded
+lookahead, so each conditional nested inside another multiplies the work by
+roughly 1.8x:
+
+| Nesting depth | 2 | 4 | 6 | 8 |
+| --- | --- | --- | --- | --- |
+| Parse | 244 µs | 710 µs | 2.48 ms | 9.64 ms |
+
+It does not level off. Sixteen nested conditionals make a 450-byte program that
+takes several seconds to parse. Grouped expressions and long operator chains are
+unaffected — the cost is specific to nesting `if ... then ... else` inside itself.
+Keep conditionals shallow for now; this is a grammar problem, and fixing it is
+[planned work](docs/PLAN.md).
+
+The VM takes about 24% more time than the interpreter for `small` and 37% more
+for `nested`, but about 23% less for `large`. Neither backend is consistently
+faster in this table; choose between `flux run` and `flux compile` based on
+distribution needs and measurements of your own workload.
+
+Full detail, including allocation counts and the methodology, is in
+[the development baseline](docs/BASELINE.md).
+
 ## Project Structure
 
+- `source/` - Source snapshots and the byte spans that locate code in them
+- `render/` - The one place a diagnostic becomes text: snippets, colour, JSON
+- `fault/` - The catalogue of failures a program can produce while running
+- `diagnostic/` - Structured error reporting: codes, severities, spans, notes
 - `lexer/` - Tokenizes source code into tokens
 - `parser/` - Parses tokens into an Abstract Syntax Tree (AST)
 - `types/` - Type system implementation with type checking

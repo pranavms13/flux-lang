@@ -1,7 +1,7 @@
 # Flux Language
 
 Flux is a small programming language implemented in Go. A program can be run
-directly or compiled to a standalone executable; both paths go through the same
+directly or compiled to a standalone executable; both paths resolve lexical bindings and use the same optional
 type checker and report failures with the same codes and positions.
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pranavms13/flux-lang)
@@ -31,26 +31,40 @@ This is the whole of it. Anything not listed is not implemented.
 
 - **Values**: `int` (signed 64-bit), `string`, `bool` (`true`/`false`, with
   `yes`/`no` as aliases), `void`, lists, dictionaries and functions.
-- **Operators**: `+` on two `int`s or two `string`s, `-` on two `int`s, and
-  `==`, `<`, `>`. Comparison binds more loosely than `+` and `-`; both levels
-  associate to the left. Parentheses group.
-- **Expressions**: `if C then A else B` (the `else` is required), function
-  literals `fn(x: int): int => body`, calls, indexing `c[k]`, list and
-  dictionary literals, and blocks `{ e1 e2 }` whose value is the last
-  expression.
-- **Declarations**: top-level `let`, optionally annotated. A top-level
-  expression whose value is not void displays it.
+- **Operators**: checked `+`, `-`, `*`, `/`, `%` and unary `-` on signed
+  64-bit integers; string concatenation with `+`; `==`, `!=`, `<`, `<=`, `>`,
+  `>=`; boolean `!`, short-circuit `&&` and `||`. Parentheses group.
+- **Expressions**: boolean `if C then A else B`, function literals
+  `fn(x: int): int => body`, calls, list/dictionary indexing and literals,
+  and blocks with local declarations and a final result.
+- **Bindings and functions**: immutable `let` at top level or in blocks,
+  optional semicolons, lexical shadowing, closures that retain captured
+  bindings, and global/local self-recursion with complete type signatures.
+  Non-void top-level expressions display their value.
 - **Built-ins**: `print`, which writes one line and returns void. It is an
   ordinary binding and can be shadowed.
 - **Type checking**: static, with four modes selected by `flux.json`, and
-  annotations for every type form. An unannotated parameter is not constrained.
+  annotations for every type form. An unannotated parameter is not constrained unless a variable signature supplies its type.
 - **Diagnostics**: every failure carries a code and underlines the construct
   that is wrong, identically from both execution engines.
 
-There is no multiplication or division, no unary minus, no `!`, `&&` or `||`, no
-loops, no assignment, no `return`, no modules and no standard library beyond
+There are no loops, assignment, explicit `return`, mutual recursion, modules
+or standard library beyond
 `print`. [docs/SPEC.md](docs/SPEC.md) records which of those are decided for a
 later phase and which are simply absent.
+
+```flux
+let factorial = fn(n: int): int => {
+  let base = n <= 1
+  if base then 1 else n * factorial(n - 1)
+}
+print(factorial(5)) // 120
+```
+
+See [examples/core.flux](examples/core.flux) for returned closures and local
+recursion. Execution allows 256 active function calls by default and reports a
+located error when the limit is exceeded. Phase 3's breaking changes and
+bytecode format 2 are described in [the migration notes](docs/MIGRATION.md).
 
 ## Configuration System
 
@@ -73,7 +87,7 @@ The `flux.json` file supports the following options:
   },
   "compiler": {
     "optimizationLevel": 1, // Reserved for future optimization support
-    "debug": false          // Reserved for future debug information
+    "debug": false          // Embed source text for diagnostic snippets
   }
 }
 ```
@@ -96,7 +110,8 @@ The `flux.json` file supports the following options:
 #### 2. **Lenient** (`strict: false, warnOnly: false`)
 - **Default mode**
 - Type checking with some flexibility
-- Truthy conditions and differing branch types issue warnings
+- Differing branch types and unlike-type equality issue warnings
+- Conditions require `bool`; binding errors remain errors in every mode
 - Invalid arithmetic and annotated assignments remain errors; no implicit conversion is performed
 - Good for gradual adoption
 
@@ -417,48 +432,23 @@ make build-all
 
 ## Performance
 
-Reference numbers from `make bench` on an Apple M3 Pro (darwin/arm64, Go 1.25.1).
-They describe one machine at one commit, so treat them as a shape rather than a
-specification — the same machine varies by up to 30% between sessions. `small` is an ordinary seven-line script, `nested` is six levels
-of nested conditionals plus a closure, and `large` is 300 bindings with a
-300-element list.
+Phase 3 measurements on an Apple M3 Pro (darwin/arm64, Go 1.25.1), using
+100 ms benchmark windows:
 
 | Stage | small | nested | large |
 | --- | --- | --- | --- |
-| Parse | 254 µs | 2.49 ms | 6.40 ms |
-| Type check | 0.92 µs | 1.28 µs | 31.9 µs |
-| Compile | 1.21 µs | 1.41 µs | 36.2 µs |
-| Interpret | 0.92 µs | 0.87 µs | 31.2 µs |
-| VM | 1.14 µs | 1.19 µs | 24.1 µs |
+| Parse | 504 µs | 5.71 ms | 13.2 ms |
+| Resolve and type check | 11.2 µs | 18.0 µs | 401 µs |
 
-Two things are worth knowing before you read too much into these.
+`small` is a seven-line script, `nested` has six conditional levels and a
+closure, and `large` has 300 bindings and a 300-element list. These are local
+measurements, not performance guarantees. The larger grammar and binding
+analysis add work compared with the earlier baseline.
 
-**Parsing dominates.** For `small` and `large`, it costs roughly 52–61 times the
-other measured stages combined; for `nested`, roughly 524 times. Parsing a
-270-byte script takes 254 µs, checking it takes under 1 µs, and running it takes
-about the same. If a Flux program feels slow to start, the parser is why.
-
-**Nested conditionals parse in exponential time.** The parser uses unbounded
-lookahead, so each conditional nested inside another multiplies the work by
-roughly 1.8x:
-
-| Nesting depth | 2 | 4 | 6 | 8 |
-| --- | --- | --- | --- | --- |
-| Parse | 244 µs | 710 µs | 2.48 ms | 9.64 ms |
-
-It does not level off. Sixteen nested conditionals make a 450-byte program that
-takes several seconds to parse. Grouped expressions and long operator chains are
-unaffected — the cost is specific to nesting `if ... then ... else` inside itself.
-Keep conditionals shallow for now; this is a grammar problem, and fixing it is
-[planned work](docs/PLAN.md).
-
-The VM takes about 24% more time than the interpreter for `small` and 37% more
-for `nested`, but about 23% less for `large`. Neither backend is consistently
-faster in this table; choose between `flux run` and `flux compile` based on
-distribution needs and measurements of your own workload.
-
-Full detail, including allocation counts and the methodology, is in
-[the development baseline](docs/BASELINE.md).
+Dictionary/block ambiguity still causes exponential work when parsing nested
+conditionals. Keep nesting shallow until that parser limitation is addressed.
+See [the Phase 3 report](docs/PHASE3.md) for allocations and methodology, and
+[the historical baseline](docs/BASELINE.md) for earlier measurements.
 
 ## Project Structure
 
@@ -468,6 +458,8 @@ Full detail, including allocation counts and the methodology, is in
 - `diagnostic/` - Structured error reporting: codes, severities, spans, notes
 - `lexer/` - Tokenizes source code into tokens
 - `parser/` - Parses tokens into an Abstract Syntax Tree (AST)
+- `resolver/` - Lexical binding identities, scopes and captures
+- `value/` - Checked arithmetic, equality, indexing and display
 - `types/` - Type system implementation with type checking
 - `config/` - Configuration system for flux.json
 - `compiler/` - Compiles AST into bytecode

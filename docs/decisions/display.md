@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `EVL-DISPLAY-SCALAR`, `EVL-DISPLAY-CONTAINER`, `EVL-DISPLAY-OPAQUE`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.1 (shared value semantics)
 - Migration: [Displayed containers](../MIGRATION.md#displayed-containers)
 

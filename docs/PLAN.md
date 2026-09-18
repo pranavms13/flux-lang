@@ -1,16 +1,15 @@
 # Flux language development plan
 
-Research completed: 2026-09-17. Status: proposed implementation roadmap.
+Research completed: 2026-09-17. Implementation status: Phases 1–3 complete;
+Phases 4–5 remain planned. Phase 3 validation is recorded in [PHASE3.md](PHASE3.md).
 
 This plan develops the five agreed areas in order: diagnostics, language semantics,
 core expressions/functions, type inference, and standard library/tooling. The
-research below was completed before this file was created. Checkboxes describe
-future work, not functionality already implemented.
+research below was completed before this file was created. Checked boxes describe completed work; unchecked boxes describe future work.
 
-The baseline is the current working tree, including the stabilization changes
-from the project review. Those changes are still uncommitted. Existing behavior
-is summarized in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). This roadmap does not
-assume a clean checkout, a published release, or a new dependency version.
+The original stabilization baseline was checkpointed in `503377e`; see
+[BASELINE.md](BASELINE.md). Phase 3 starts from latest main `bcbd0ed` on a clean
+working tree. Current behavior is summarized in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## 1. Intended outcome and boundaries
 
@@ -35,7 +34,7 @@ passes, and a debugger. These deserve separate designs after this foundation.
 Go remains the implementation language; Participle remains the parser unless a
 measured limitation justifies replacing it.
 
-## 2. Current architecture and constraints
+## 2. Original architecture and constraints
 
 | Area | Current state | Consequence for this plan |
 | --- | --- | --- |
@@ -48,6 +47,9 @@ measured limitation justifies replacing it.
 | CLI/config | `run`, `compile`, `init`, `version`; configuration comes from working directory | Extract reusable analysis; add checking/formatting/server commands later |
 | Editor | Declarative TextMate grammar and language configuration | A language client and server are new components |
 | Tests | Backend parity, examples, CLI binaries, type modes, config, lexer | Extend these fixtures; do not discard the stabilization regressions |
+
+The table above records the roadmap baseline, before Phases 1–3. See
+[DEVELOPMENT.md](DEVELOPMENT.md) for the current resolved binding architecture.
 
 Review these files before each affected implementation: [AST](ast/datastructures.go),
 [parser](parser/parser.go), [checker](types/types.go), [interpreter](runtime/runtime.go),
@@ -482,6 +484,10 @@ change with unrelated environment mutations. [Binding reference](https://raw.git
 
 ## 7. Phase 3 — Core expressions, lexical scopes, and recursive functions
 
+Completed 2026-09-19 from `bcbd0ed`, with latest main `bf54906` incorporated.
+Implementation and verification evidence:
+[PHASE3.md](PHASE3.md).
+
 ### Outcome
 
 Ordinary arithmetic and logical expressions work consistently. Blocks support local
@@ -503,32 +509,32 @@ Target precedence, highest first:
 | Logical AND | `&&` | Left, short-circuit |
 | Logical OR | `\|\|` | Left, short-circuit |
 
-- [ ] Add longest-match lexer rules for multi-character operators before their prefixes.
-- [ ] Keep minus as an operator token; do not make `1-2` lex as `1` and a signed literal.
-- [ ] Replace the current single comparison level and extend AST grammar without
+- [x] Add longest-match lexer rules for multi-character operators before their prefixes.
+- [x] Keep minus as an operator token; do not make `1-2` lex as `1` and a signed literal.
+- [x] Replace the current single comparison level and extend AST grammar without
       introducing left recursion into Participle.
-- [ ] Support parenthesized conditionals/functions wherever a primary expression is valid.
-- [ ] Introduce runtime value helpers, proposed under `value/`, for arithmetic, comparison,
+- [x] Support parenthesized conditionals/functions wherever a primary expression is valid.
+- [x] Introduce runtime value helpers, proposed under `value/`, for arithmetic, comparison,
       equality, and stable printing. Do not centralize AST traversal or VM dispatch.
-- [ ] Include shared runtime helpers in the Phase 1 embedded-source manifest.
-- [ ] Parse integer magnitudes with explicit range handling. Support the literal
+- [x] Include shared runtime helpers in the Phase 1 embedded-source manifest.
+- [x] Parse integer magnitudes with explicit range handling. Support the literal
       `-9223372036854775808` without first rejecting its positive magnitude.
-- [ ] Check addition, subtraction, multiplication, negation, division, remainder, and
+- [x] Check addition, subtraction, multiplication, negation, division, remainder, and
       conversion boundaries in both normal evaluation and any future constant folding.
-- [ ] Range-check list indexes before converting int64 to host `int`.
-- [ ] Update serialized constants, gob tests, dictionaries, and existing integer assertions.
-- [ ] Replace `reflect.DeepEqual` with the specified comparable-value semantics and
+- [x] Range-check list indexes before converting int64 to host `int`.
+- [x] Update serialized constants, gob tests, dictionaries, and existing integer assertions.
+- [x] Replace `reflect.DeepEqual` with the specified comparable-value semantics and
       explicit errors for unsupported equality operands.
 
 ### P3.2 — Implement short-circuit control flow
 
-- [ ] Give logical expressions dedicated AST/checker/evaluator handling; do not send them
+- [x] Give logical expressions dedicated AST/checker/evaluator handling; do not send them
       through an eager generic binary-operator evaluator.
-- [ ] Check both operand types statically, but evaluate the right operand only when required.
-- [ ] Compile explicit branch paths that each produce one bool. With the current consuming
+- [x] Check both operand types statically, but evaluate the right operand only when required.
+- [x] Compile explicit branch paths that each produce one bool. With the current consuming
       jump opcode, emit a replacement `false`/`true` result on the skipped branch.
-- [ ] Record source maps for generated branch instructions and any runtime bool checks.
-- [ ] Verify jump targets and stack effects for nested expressions in arguments, arrays,
+- [x] Record source maps for generated branch instructions and any runtime bool checks.
+- [x] Verify jump targets and stack effects for nested expressions in arguments, arrays,
       dictionary values, and function returns.
 
 The book's VM example uses jumps that retain the condition; Flux currently consumes
@@ -541,19 +547,19 @@ Proposed package: `resolver/`. Its output associates identifier uses with stable
 binding IDs and records declarations, scopes, and captures. It also provides the
 foundation for editor navigation in Phase 5.
 
-- [ ] Allow block items to contain `let` statements and expressions while preserving
+- [x] Allow block items to contain `let` statements and expressions while preserving
       dictionary/block disambiguation and the empty-dictionary rule.
-- [ ] Add optional semicolons to grammar/token handling and retain their source positions.
-- [ ] Resolve names before optional type checking, so disabling types does not change scope.
-- [ ] Diagnose same-scope duplicates, invalid self-initialization, and unresolved names.
-- [ ] Use declaration state to reject `let x = x` while allowing recursive function bodies.
-- [ ] Bind locals separately from globals in both backends; locals must not escape their scope.
-- [ ] Map identifiers to binding identities rather than repeatedly searching mutable name maps.
-- [ ] Represent captured values through explicit environment cells or equivalent resolved
+- [x] Add optional semicolons to grammar/token handling and retain their source positions.
+- [x] Resolve names before optional type checking, so disabling types does not change scope.
+- [x] Diagnose same-scope duplicates, invalid self-initialization, and unresolved names.
+- [x] Use declaration state to reject `let x = x` while allowing recursive function bodies.
+- [x] Bind locals separately from globals in both backends; locals must not escape their scope.
+- [x] Map identifiers to binding identities rather than repeatedly searching mutable name maps.
+- [x] Represent captured values through explicit environment cells or equivalent resolved
       slots; ensure their lifetime outlasts the outer function call.
-- [ ] Add VM local/capture operations and function capture metadata as needed; keep
+- [x] Add VM local/capture operations and function capture metadata as needed; keep
       four-byte operands and check bounds.
-- [ ] Preserve one expression result at block exit while cleaning up its temporary values.
+- [x] Preserve one expression result at block exit while cleaning up its temporary values.
 
 Captured cells are recommended for the initial implementation because Flux runs on
 Go's managed heap and self-recursive closures need a stable binding to initialize.
@@ -561,18 +567,18 @@ Stack-slot/upvalue optimization can follow profiling. [Closure implementation re
 
 ### P3.4 — Introduce typed self-recursion
 
-- [ ] Accept self-reference only for function-valued declarations, not arbitrary initializers.
-- [ ] Require a complete signature for recursive functions in this phase, supplied by
+- [x] Accept self-reference only for function-valued declarations, not arbitrary initializers.
+- [x] Require a complete signature for recursive functions in this phase, supplied by
       the variable annotation or parameter-plus-return annotations.
-- [ ] Bind that signature before checking the body, then verify the body against it.
-- [ ] Allocate the runtime binding before constructing the closure; initialize it before
+- [x] Bind that signature before checking the body, then verify the body against it.
+- [x] Allocate the runtime binding before constructing the closure; initialize it before
       exposing the function to calls. Resolve self-reference to that exact binding.
-- [ ] Handle both global and locally declared recursive functions.
-- [ ] Add a configurable/internal execution depth limit with a structured failure so tests
+- [x] Handle both global and locally declared recursive functions.
+- [x] Add a configurable/internal execution depth limit with a structured failure so tests
       cannot exhaust the Go stack; define the user-facing default in the specification.
-- [ ] Carry useful call traces through recursion; cap rendered trace length independently
+- [x] Carry useful call traces through recursion; cap rendered trace length independently
       of the execution-depth limit.
-- [ ] Defer mutual recursion and general forward-declaration hoisting to a later design.
+- [x] Defer mutual recursion and general forward-declaration hoisting to a later design.
 
 Target example:
 
@@ -586,21 +592,21 @@ print(factorial(5)) // 120
 
 ### Phase 3 completion criteria
 
-- [ ] Precedence fixtures include `1 + 2 * 3`, `10 - 3 - 2`, `-2 * 3`, `!(1 < 2)`,
+- [x] Precedence fixtures include `1 + 2 * 3`, `10 - 3 - 2`, `-2 * 3`, `!(1 < 2)`,
       and combinations of comparisons/equality/boolean operators.
-- [ ] `false && (1 / 0 > 0)` and `true || (1 / 0 > 0)` succeed without evaluating division.
+- [x] `false && (1 / 0 > 0)` and `true || (1 / 0 > 0)` succeed without evaluating division.
       Reversing their left booleans produces the expected runtime failure.
-- [ ] Skipped branches produce no observable prints or calls; their static type errors
+- [x] Skipped branches produce no observable prints or calls; their static type errors
       are still reported when checking is enabled.
-- [ ] Integer fixtures cover both extrema, overflow for each operator, signed remainders,
+- [x] Integer fixtures cover both extrema, overflow for each operator, signed remainders,
       zero divisors, and unary literal boundaries.
-- [ ] Closure tests cover nested captures, shadowing, capture after outer return, and
+- [x] Closure tests cover nested captures, shadowing, capture after outer return, and
       functions declared before a later inner binding of the same name.
-- [ ] Typed factorial and a locally recursive function pass in all execution paths.
-- [ ] Out-of-scope reads, duplicate declarations, bad recursion signatures, and excessive
+- [x] Typed factorial and a locally recursive function pass in all execution paths.
+- [x] Out-of-scope reads, duplicate declarations, bad recursion signatures, and excessive
       call depth report the designated diagnostic.
-- [ ] Comparisons and printing of function values never expose Go implementation details.
-- [ ] Existing examples, four-byte operand stress tests, and standalone builds still pass.
+- [x] Comparisons and printing of function values never expose Go implementation details.
+- [x] Existing examples, four-byte operand stress tests, and standalone builds still pass.
 
 ## 8. Phase 4 — Constraint-based inference and reliable checking modes
 
@@ -1001,5 +1007,5 @@ Before releasing a phase:
 - [ ] Known limitations are listed without presenting cross-builds as runtime tests.
 - [ ] Publishing is performed as a separate release action after local validation.
 
-The first implementation slice is P1.1–P1.2: canonical source spans, named parsing,
-and position fixtures. It establishes the data every later phase depends on.
+The next implementation phase is Phase 4: constraint inference and type schemes,
+building on Phase 3 binding IDs, lexical cells, and annotated recursive signatures.

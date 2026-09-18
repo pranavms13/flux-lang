@@ -4,49 +4,47 @@ import "github.com/alecthomas/participle/v2/lexer"
 
 type ListExpr struct {
 	Node
-	LBrack string  `parser:"'['"`
-	Elems  []*Expr `parser:"(@@ (',' @@)*)?"`
-	RBrack string  `parser:"']'"`
+	LBrack string  `parser:"'[':Operators"`
+	Elems  []*Expr `parser:"(@@ (',':Operators @@)*)?"`
+	RBrack string  `parser:"']':Operators"`
 }
 
 type DictExpr struct {
 	Node
-	LBrace string      `parser:"'{'"`
-	Pairs  []*DictPair `parser:"(@@ (',' @@)*)?"`
-	RBrace string      `parser:"'}'"`
+	LBrace string      `parser:"'{':Operators"`
+	Pairs  []*DictPair `parser:"(@@ (',':Operators @@)*)?"`
+	RBrace string      `parser:"'}':Operators"`
 }
 
 type DictPair struct {
 	Node
 	Key   *Expr  `parser:"@@"`
-	Colon string `parser:"':'"`
+	Colon string `parser:"':':Operators"`
 	Value *Expr  `parser:"@@"`
 }
 
 type BlockExpr struct {
 	Node
-	LBrace string  `parser:"'{'"`
-	Exprs  []*Expr `parser:"@@*"`
-	RBrace string  `parser:"'}'"`
+	LBrace     string       `parser:"'{':Operators"`
+	Statements []*Statement `parser:"@@*"`
+	RBrace     string       `parser:"'}':Operators"`
 }
 
 type IfExpr struct {
 	Node
-	If       string `parser:"'if'"`
+	If       string `parser:"'if':Keywords"`
 	Cond     *Expr  `parser:"@@"`
-	Then     string `parser:"'then'"`
+	Then     string `parser:"'then':Keywords"`
 	ThenExpr *Expr  `parser:"@@"`
-	Else     string `parser:"'else'"`
+	Else     string `parser:"'else':Keywords"`
 	ElseExpr *Expr  `parser:"@@"`
 }
 
 type Expr struct {
 	Node
-	If      *IfExpr      `parser:"  @@"`
-	Func    *FuncExpr    `parser:"| @@"`
-	Bin     *Binary      `parser:"| @@"`
-	Block   *BlockExpr   `parser:"| @@"`
-	Primary *PrimaryExpr `parser:"| @@"`
+	If   *IfExpr   `parser:"  @@"`
+	Func *FuncExpr `parser:"| @@"`
+	Bin  *Binary   `parser:"| @@"`
 }
 
 type PrimaryExpr struct {
@@ -88,28 +86,29 @@ type Program struct {
 
 type Statement struct {
 	Node
-	Let  *LetStatement `parser:"  @@"`
-	Expr *Expr         `parser:"| @@"`
+	Let       *LetStatement `parser:"( @@"`
+	Expr      *Expr         `parser:"| @@ )"`
+	Separator *Separator    `parser:"@@?"`
 }
 
 type LetStatement struct {
 	Node
-	Let      string    `parser:"'let'"`
+	Let      string    `parser:"'let':Keywords"`
 	Name     string    `parser:"@Ident"`
 	TypeAnno *TypeAnno `parser:"@@?"`
-	Eq       string    `parser:"'='"`
+	Eq       string    `parser:"'=':Operators"`
 	Expr     *Expr     `parser:"@@"`
 }
 
 type TypeAnno struct {
 	Node
-	Colon string `parser:"':'"`
+	Colon string `parser:"':':Operators"`
 	Type  *Type  `parser:"@@"`
 }
 
 type Type struct {
 	Node
-	Basic    *string   `parser:"  @('int' | 'string' | 'bool' | 'void')"`
+	Basic    *string   `parser:"  @('int':Keywords | 'string':Keywords | 'bool':Keywords | 'void':Keywords)"`
 	List     *ListType `parser:"| @@"`
 	Dict     *DictType `parser:"| @@"`
 	Function *FuncType `parser:"| @@"`
@@ -117,33 +116,33 @@ type Type struct {
 
 type ListType struct {
 	Node
-	LBrack   string `parser:"'['"`
+	LBrack   string `parser:"'[':Operators"`
 	ElemType *Type  `parser:"@@"`
-	RBrack   string `parser:"']'"`
+	RBrack   string `parser:"']':Operators"`
 }
 
 type DictType struct {
 	Node
-	LBrace    string `parser:"'{'"`
+	LBrace    string `parser:"'{':Operators"`
 	KeyType   *Type  `parser:"@@"`
-	Colon     string `parser:"':'"`
+	Colon     string `parser:"':':Operators"`
 	ValueType *Type  `parser:"@@"`
-	RBrace    string `parser:"'}'"`
+	RBrace    string `parser:"'}':Operators"`
 }
 
 type FuncType struct {
 	Node
-	Fn         string  `parser:"'fn'"`
-	LParen     string  `parser:"'('"`
-	ParamTypes []*Type `parser:"(@@ (',' @@)*)?"`
-	RParen     string  `parser:"')'"`
+	Fn         string  `parser:"'fn':Keywords"`
+	LParen     string  `parser:"'(':Operators"`
+	ParamTypes []*Type `parser:"(@@ (',':Operators @@)*)?"`
+	RParen     string  `parser:"')':Operators"`
 	Arrow      string  `parser:"@TypeArrow"`
 	ReturnType *Type   `parser:"@@"`
 }
 
 type Term struct {
 	Node
-	Number *int     `parser:"  @Int"`
+	Number *Integer `parser:"  @Int"`
 	String *string  `parser:"| @String"`
 	Ident  *string  `parser:"| @Ident"`
 	Bool   *Boolean `parser:"| @Bool"`
@@ -151,39 +150,100 @@ type Term struct {
 
 type CallExpr struct {
 	Node
-	LParen string  `parser:"'('"`
-	Args   []*Expr `parser:"(@@ (',' @@)*)?"`
-	RParen string  `parser:"')'"`
+	LParen string  `parser:"'(':Operators"`
+	Args   []*Expr `parser:"(@@ (',':Operators @@)*)?"`
+	RParen string  `parser:"')':Operators"`
 }
 
-// Binary separates comparisons from addition/subtraction to preserve precedence.
+// Each level is non-left-recursive. Relational permits only one comparison.
 type Binary struct {
 	Node
-	Left *Additive     `parser:"@@"`
-	Rest []*Comparison `parser:"@@*"`
+	Left *LogicalAnd    `parser:"@@"`
+	Rest []*Disjunction `parser:"@@*"`
 }
-
+type Disjunction struct {
+	Node
+	Operator string      `parser:"@'||':Operators"`
+	Right    *LogicalAnd `parser:"@@"`
+}
+type LogicalAnd struct {
+	Node
+	Left *Equality      `parser:"@@"`
+	Rest []*Conjunction `parser:"@@*"`
+}
+type Conjunction struct {
+	Node
+	Operator string    `parser:"@'&&':Operators"`
+	Right    *Equality `parser:"@@"`
+}
+type Equality struct {
+	Node
+	Left *Relational   `parser:"@@"`
+	Rest []*EqualityOp `parser:"@@*"`
+}
+type EqualityOp struct {
+	Node
+	Operator string      `parser:"@('==':Operators | '!=':Operators)"`
+	Right    *Relational `parser:"@@"`
+}
+type Relational struct {
+	Node
+	Left *Additive   `parser:"@@"`
+	Rest *Comparison `parser:"@@?"`
+}
 type Comparison struct {
 	Node
-	Operator string    `parser:"@('==' | '<' | '>')"`
+	Operator string    `parser:"@('<=':Operators | '>=':Operators | '<':Operators | '>':Operators)"`
 	Right    *Additive `parser:"@@"`
 }
-
 type Additive struct {
 	Node
-	Left *PrimaryExpr `parser:"@@"`
-	Rest []*Addition  `parser:"@@*"`
+	Left *Multiplicative `parser:"@@"`
+	Rest []*Addition     `parser:"@@*"`
 }
-
 type Addition struct {
 	Node
-	Operator string       `parser:"@('+' | '-')"`
-	Right    *PrimaryExpr `parser:"@@"`
+	Operator string          `parser:"@('+':Operators | '-':Operators)"`
+	Right    *Multiplicative `parser:"@@"`
+}
+type Multiplicative struct {
+	Node
+	Left *Unary            `parser:"@@"`
+	Rest []*Multiplication `parser:"@@*"`
+}
+type Multiplication struct {
+	Node
+	Operator string `parser:"@('*':Operators | '/':Operators | '%':Operators)"`
+	Right    *Unary `parser:"@@"`
+}
+type Unary struct {
+	Node
+	Operator string       `parser:"( @('-':Operators | '!':Operators)"`
+	Operand  *Unary       `parser:"@@ )"`
+	Primary  *PrimaryExpr `parser:"| @@"`
+	// MinLiteral represents the signed minimum literal, whose positive
+	// magnitude is not itself a Flux int. Filled by parser validation.
+	MinLiteral bool
+}
+
+// Integer preserves the magnitude token while parsing. Value is int64 after
+// validation; Text lets the parser diagnose range errors without host-width
+// conversions and recognize the signed minimum beneath unary minus.
+type Integer struct {
+	Text  string
+	Value int64
+}
+
+func (i *Integer) Capture(values []string) error { i.Text = values[0]; return nil }
+
+type Separator struct {
+	Node
+	Semicolon string `parser:"';':Operators"`
 }
 
 type GroupExpr struct {
 	Node
-	Expr *Expr `parser:"'(' @@ ')'"`
+	Expr *Expr `parser:"'(':Operators @@ ')':Operators"`
 }
 
 // Boolean captures the literal's value, rather than whether a token was present.
@@ -196,7 +256,7 @@ func (b *Boolean) Capture(values []string) error {
 
 type IndexExpr struct {
 	Node
-	LBrack string `parser:"'['"`
+	LBrack string `parser:"'[':Operators"`
 	Index  *Expr  `parser:"@@"`
-	RBrack string `parser:"']'"`
+	RBrack string `parser:"']':Operators"`
 }

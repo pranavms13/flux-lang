@@ -3,9 +3,9 @@ package vm
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/pranavms13/flux-lang/value"
 	"io"
 	"os"
-	"reflect"
 
 	"github.com/pranavms13/flux-lang/diagnostic"
 	"github.com/pranavms13/flux-lang/fault"
@@ -34,6 +34,23 @@ const (
 	OpIndex
 	OpArray
 	OpDict
+	OpMultiply
+	OpDivide
+	OpRemainder
+	OpNotEqual
+	OpLessEqual
+	OpGreaterEqual
+	OpNegate
+	OpNot
+	OpCheckBool
+	OpCheckKey
+	OpDeclareGlobal
+	OpDeclareLocal
+	OpDefineLocal
+	OpGetLocal
+	OpGetCapture
+	OpEnterScope
+	OpLeaveScope
 )
 
 // Operands returns how many four-byte operands an opcode carries.
@@ -45,7 +62,8 @@ const (
 func (o Opcode) Operands() int {
 	switch o {
 	case OpConstant, OpDefineGlobal, OpGetGlobal, OpCall, OpClosure,
-		OpJumpIfFalse, OpJumpIfTrue, OpJump, OpArray, OpDict:
+		OpJumpIfFalse, OpJumpIfTrue, OpJump, OpArray, OpDict,
+		OpDeclareGlobal, OpDeclareLocal, OpDefineLocal, OpGetLocal, OpGetCapture:
 		return 1
 	default:
 		return 0
@@ -53,9 +71,13 @@ func (o Opcode) Operands() int {
 }
 
 type Chunk struct {
-	Code      []byte
-	Constants []interface{}
-	Params    []string
+	Code         []byte
+	Constants    []interface{}
+	Params       []string
+	ParamIDs     []uint32
+	Captures     []uint32
+	BindingCount uint32
+	Failure      *fault.Error
 	// Name labels the function in a call trace. It is the name the function
 	// was bound to, or empty for a literal that was never named.
 	Name string
@@ -82,19 +104,29 @@ func (c *Chunk) Label() string {
 }
 
 type Closure struct {
-	Chunk  *Chunk
-	Locals map[string]interface{}
+	Chunk    *Chunk
+	Captures map[uint32]*value.Cell
 }
+
+func (*Closure) FluxTypeName() string { return "function" }
 
 type builtinPrint struct{}
 
+func (builtinPrint) FluxTypeName() string { return "function" }
+
 type VM struct {
-	chunk   *Chunk
-	ip      int
-	stack   []interface{}
-	globals map[string]interface{}
-	locals  map[string]interface{}
-	out     io.Writer
+	chunk    *Chunk
+	ip       int
+	stack    []interface{}
+	globals  map[uint32]*value.Cell
+	locals   map[uint32]*value.Cell
+	captures map[uint32]*value.Cell
+	scopes   []map[uint32]*value.Cell
+	depth    int
+	// MaxDepth limits active user function calls. Zero uses 256.
+	MaxDepth   int
+	boundaries map[int]bool
+	out        io.Writer
 }
 
 // New returns a VM that prints to standard output.
@@ -113,8 +145,8 @@ func NewWithOutput(chunk *Chunk, out io.Writer) *VM {
 		chunk:   chunk,
 		ip:      0,
 		stack:   []interface{}{},
-		globals: map[string]interface{}{},
-		locals:  map[string]interface{}{},
+		globals: map[uint32]*value.Cell{1: {Value: builtinPrint{}, Initialized: true}},
+		locals:  map[uint32]*value.Cell{},
 		out:     out,
 	}
 }
@@ -125,6 +157,18 @@ func NewWithOutput(chunk *Chunk, out io.Writer) *VM {
 // from a defect in the VM itself, and the CLI would have to guess which it had
 // caught.
 func (vm *VM) Run() error {
+	if vm.chunk.Failure != nil {
+		return vm.chunk.Failure
+	}
+	if vm.MaxDepth <= 0 {
+		vm.MaxDepth = value.DefaultMaxDepth
+	}
+	vm.boundaries = map[int]bool{len(vm.chunk.Code): true}
+	for ip := 0; ip < len(vm.chunk.Code); {
+		vm.boundaries[ip] = true
+		ip += 1 + 4*Opcode(vm.chunk.Code[ip]).Operands()
+	}
+
 	for vm.ip < len(vm.chunk.Code) {
 		// The instruction's own offset, captured before its operands are read,
 		// so that a failure points at this operation and not the next one.
@@ -147,6 +191,11 @@ func (vm *VM) step(op Opcode, start int) error {
 	if len(vm.chunk.Code)-vm.ip < 4*op.Operands() {
 		return vm.internal(start, "instruction at %d is missing its operand", start)
 	}
+	for offset := 0; offset < op.Operands(); offset++ {
+		if uint64(binary.BigEndian.Uint32(vm.chunk.Code[vm.ip+offset*4:vm.ip+offset*4+4])) > uint64(^uint(0)>>1) {
+			return vm.internal(start, "operand exceeds host index range")
+		}
+	}
 	switch op {
 	case OpConstant:
 		index := vm.readOperand()
@@ -160,13 +209,16 @@ func (vm *VM) step(op Opcode, start int) error {
 		}
 		index := vm.pop()
 		value := vm.pop()
-		result, err := indexValue(value, index)
+		result, err := valueIndex(value, index)
 		if err != nil {
 			return vm.locatedFailure(err, start)
 		}
 		vm.push(result)
 	case OpDict:
 		size := vm.readOperand()
+		if size > len(vm.stack)/2 {
+			return vm.internal(start, "dictionary needs more stack values")
+		}
 		if err := vm.need(size*2, start, op); err != nil {
 			return err
 		}
@@ -178,6 +230,9 @@ func (vm *VM) step(op Opcode, start int) error {
 		}
 		dict := make(map[interface{}]interface{}, size)
 		for i, key := range keys {
+			if err := value.Key(key); err != nil {
+				return vm.locatedFailure(err, start)
+			}
 			dict[key] = values[i]
 		}
 		vm.push(dict)
@@ -191,24 +246,43 @@ func (vm *VM) step(op Opcode, start int) error {
 			elems[i] = vm.pop()
 		}
 		vm.push(elems)
-	case OpAdd, OpSub, OpGreater, OpLess:
+	case OpAdd, OpSub, OpGreater, OpLess, OpMultiply, OpDivide, OpRemainder, OpLessEqual, OpGreaterEqual, OpEqual, OpNotEqual:
 		if err := vm.need(2, start, op); err != nil {
 			return err
 		}
-		b := vm.pop()
-		a := vm.pop()
-		result, err := arithmetic(op, a, b)
+		b, a := vm.pop(), vm.pop()
+		result, err := value.Binary(operatorName(op), a, b)
 		if err != nil {
 			return vm.locatedFailure(err, start)
 		}
 		vm.push(result)
-	case OpEqual:
+	case OpNegate, OpNot:
+		if err := vm.need(1, start, op); err != nil {
+			return err
+		}
+		name := "-"
+		if op == OpNot {
+			name = "!"
+		}
+		result, err := value.Unary(name, vm.pop())
+		if err != nil {
+			return vm.locatedFailure(err, start)
+		}
+		vm.push(result)
+	case OpCheckBool:
+		if err := vm.need(1, start, op); err != nil {
+			return err
+		}
+		if _, err := value.Bool(vm.stack[len(vm.stack)-1]); err != nil {
+			return vm.locatedFailure(err, start)
+		}
+	case OpCheckKey:
 		if err := vm.need(2, start, op); err != nil {
 			return err
 		}
-		b := vm.pop()
-		a := vm.pop()
-		vm.push(reflect.DeepEqual(a, b))
+		if err := value.Key(vm.stack[len(vm.stack)-2]); err != nil {
+			return vm.locatedFailure(err, start)
+		}
 	case OpPop:
 		if err := vm.need(1, start, op); err != nil {
 			return err
@@ -219,42 +293,71 @@ func (vm *VM) step(op Opcode, start int) error {
 			return err
 		}
 		if val := vm.pop(); val != nil {
-			fmt.Fprintln(vm.out, val)
+			fmt.Fprintln(vm.out, value.Display(val))
 		}
-	case OpDefineGlobal:
-		name, err := vm.constantName(start)
-		if err != nil {
-			return err
+	case OpDeclareGlobal, OpDeclareLocal, OpDefineGlobal, OpDefineLocal, OpGetGlobal, OpGetLocal, OpGetCapture:
+		id := uint32(vm.readOperand())
+		if id == 0 || id > vm.chunk.BindingCount {
+			return vm.internal(start, "binding %d is out of bounds", id)
 		}
-		if err := vm.need(1, start, op); err != nil {
-			return err
+		env := vm.locals
+		if op == OpDeclareGlobal || op == OpDefineGlobal || op == OpGetGlobal {
+			env = vm.globals
+		} else if op == OpGetCapture {
+			env = vm.captures
 		}
-		vm.globals[name] = vm.pop()
-	case OpGetGlobal:
-		name, err := vm.constantName(start)
-		if err != nil {
-			return err
-		}
-		switch {
-		case has(vm.locals, name):
-			vm.push(vm.locals[name])
-		case has(vm.globals, name):
-			vm.push(vm.globals[name])
-		case name == "print":
-			vm.push(builtinPrint{})
+		switch op {
+		case OpDeclareGlobal, OpDeclareLocal:
+			if _, ok := env[id]; ok {
+				return vm.internal(start, "binding %d is already allocated", id)
+			}
+			env[id] = &value.Cell{}
+		case OpDefineGlobal, OpDefineLocal:
+			if err := vm.need(1, start, op); err != nil {
+				return err
+			}
+			cell := env[id]
+			if cell == nil || cell.Initialized {
+				return vm.internal(start, "binding %d cannot be initialized", id)
+			}
+			cell.Value, cell.Initialized = vm.pop(), true
 		default:
-			return vm.locatedFailure(fault.UndefinedValue(name), start)
+			cell := env[id]
+			if cell == nil || !cell.Initialized {
+				return vm.internal(start, "binding %d is unavailable", id)
+			}
+			vm.push(cell.Value)
 		}
+	case OpEnterScope:
+		vm.scopes = append(vm.scopes, vm.locals)
+		vm.locals = copyCells(vm.locals)
+	case OpLeaveScope:
+		if len(vm.scopes) == 0 {
+			return vm.internal(start, "scope stack is empty")
+		}
+		vm.locals = vm.scopes[len(vm.scopes)-1]
+		vm.scopes = vm.scopes[:len(vm.scopes)-1]
 	case OpJumpIfFalse, OpJumpIfTrue:
 		offset := vm.readOperand()
+		if !vm.boundaries[offset] {
+			return vm.internal(start, "invalid jump target %d", offset)
+		}
 		if err := vm.need(1, start, op); err != nil {
 			return err
 		}
-		if vm.truthy(vm.pop()) == (op == OpJumpIfTrue) {
+		b, err := value.Bool(vm.pop())
+		if err != nil {
+			return vm.locatedFailure(err, start)
+		}
+		if b == (op == OpJumpIfTrue) {
 			vm.ip = offset
 		}
 	case OpJump:
-		vm.ip = vm.readOperand()
+		offset := vm.readOperand()
+		if !vm.boundaries[offset] {
+			return vm.internal(start, "invalid jump target %d", offset)
+		}
+		vm.ip = offset
 	case OpCall:
 		return vm.call(vm.readOperand(), start)
 	case OpClosure:
@@ -266,13 +369,21 @@ func (vm *VM) step(op Opcode, start int) error {
 		if !ok {
 			return vm.internal(start, "constant %d is not a function", index)
 		}
-		// The closure keeps its chunk, which carries the function's name and
-		// the source map its failures are reported through.
-		locals := make(map[string]interface{}, len(vm.locals))
-		for name, value := range vm.locals {
-			locals[name] = value
+		captures := map[uint32]*value.Cell{}
+		for _, id := range fnChunk.Captures {
+			if id == 0 || id > vm.chunk.BindingCount {
+				return vm.internal(start, "capture %d is out of bounds", id)
+			}
+			cell := vm.locals[id]
+			if cell == nil {
+				cell = vm.captures[id]
+			}
+			if cell == nil {
+				return vm.internal(start, "capture %d is unavailable", id)
+			}
+			captures[id] = cell
 		}
-		vm.push(&Closure{Chunk: fnChunk, Locals: locals})
+		vm.push(&Closure{Chunk: fnChunk, Captures: captures})
 	case OpReturn:
 		return nil
 	default:
@@ -284,6 +395,9 @@ func (vm *VM) step(op Opcode, start int) error {
 // call consumes a callee and its arguments, runs a closure or builtin, and
 // pushes the result while preserving call traces on failure.
 func (vm *VM) call(nargs, start int) error {
+	if nargs >= len(vm.stack) {
+		return vm.internal(start, "call needs more stack values")
+	}
 	if err := vm.need(nargs+1, start, OpCall); err != nil {
 		return err
 	}
@@ -299,25 +413,39 @@ func (vm *VM) call(nargs, start int) error {
 			return vm.locatedFailure(
 				fault.ArgumentCount(fn.Chunk.Label(), len(fn.Chunk.Params), len(args)), start)
 		}
+		if vm.depth >= vm.MaxDepth {
+			return vm.locatedFailure(fault.CallDepth(vm.MaxDepth), start)
+		}
+		if len(fn.Chunk.ParamIDs) != len(args) {
+			return vm.internal(start, "function parameter metadata is invalid")
+		}
 		subVM := NewWithOutput(fn.Chunk, vm.out)
 		subVM.globals = vm.globals
-		for name, value := range fn.Locals {
-			subVM.locals[name] = value
-		}
-		for i, param := range fn.Chunk.Params {
-			subVM.locals[param] = args[i]
+		subVM.captures = fn.Captures
+		subVM.depth, subVM.MaxDepth = vm.depth+1, vm.MaxDepth
+		for i, id := range fn.Chunk.ParamIDs {
+			if id == 0 || id > fn.Chunk.BindingCount {
+				return vm.internal(start, "parameter %d is out of bounds", id)
+			}
+			if subVM.locals[id] != nil {
+				return vm.internal(start, "duplicate parameter slot %d", id)
+			}
+			subVM.locals[id] = &value.Cell{Value: args[i], Initialized: true}
 		}
 		if err := subVM.Run(); err != nil {
 			// The failure unwinds through this call, so the frame naming the
 			// function and the call site is added here, innermost first.
 			return addFrame(err, fn.Chunk.Label(), vm.chunk.Locate(start))
 		}
+		if len(subVM.stack) != 1 {
+			return vm.internal(start, "function returned %d values, expected one", len(subVM.stack))
+		}
 		vm.push(subVM.pop())
 	case builtinPrint:
 		if len(args) != 1 {
 			return vm.locatedFailure(fault.ArgumentCount("print", 1, len(args)), start)
 		}
-		fmt.Fprintln(vm.out, args[0])
+		fmt.Fprintln(vm.out, value.Display(args[0]))
 		vm.push(nil)
 	default:
 		return vm.locatedFailure(fault.NotCallable(callee), start)
@@ -325,87 +453,16 @@ func (vm *VM) call(nargs, start int) error {
 	return nil
 }
 
-// indexValue is shared by every index failure so that the VM and the
-// interpreter cannot drift apart on what "cannot index" means.
-func indexValue(value, index interface{}) (interface{}, error) {
-	switch v := value.(type) {
-	case []interface{}:
-		idx, ok := index.(int)
-		if !ok {
-			return nil, fault.IndexType(index)
-		}
-		if idx < 0 || idx >= len(v) {
-			return nil, fault.IndexRange(idx, len(v))
-		}
-		return v[idx], nil
-	case map[interface{}]interface{}:
-		result, exists := v[index]
-		if !exists {
-			return nil, fault.MissingKey(index)
-		}
-		return result, nil
-	default:
-		return nil, fault.NotIndexable(value)
+func valueIndex(v, index any) (any, error) { return value.Index(v, index) }
+func copyCells(env map[uint32]*value.Cell) map[uint32]*value.Cell {
+	result := make(map[uint32]*value.Cell, len(env))
+	for id, cell := range env {
+		result[id] = cell
 	}
+	return result
 }
-
-// arithmetic implements addition, subtraction, and ordering with shared
-// catalogue errors for incompatible values.
-func arithmetic(op Opcode, a, b interface{}) (interface{}, error) {
-	switch op {
-	case OpAdd:
-		switch left := a.(type) {
-		case int:
-			if right, ok := b.(int); ok {
-				return left + right, nil
-			}
-		case string:
-			if right, ok := b.(string); ok {
-				return left + right, nil
-			}
-		}
-		return nil, fault.OperandType("+", a, b)
-	case OpSub, OpGreater, OpLess:
-		left, leftOK := a.(int)
-		right, rightOK := b.(int)
-		if !leftOK || !rightOK {
-			return nil, fault.OperandType(operatorName(op), a, b)
-		}
-		switch op {
-		case OpSub:
-			return left - right, nil
-		case OpGreater:
-			return left > right, nil
-		default:
-			return left < right, nil
-		}
-	}
-	return nil, fault.OperandType(operatorName(op), a, b)
-}
-
-// operatorName translates a binary opcode to the operator spelling used in
-// Flux diagnostics.
 func operatorName(op Opcode) string {
-	switch op {
-	case OpAdd:
-		return "+"
-	case OpSub:
-		return "-"
-	case OpGreater:
-		return ">"
-	case OpLess:
-		return "<"
-	case OpEqual:
-		return "=="
-	default:
-		return fmt.Sprintf("opcode %d", op)
-	}
-}
-
-// has tests whether a binding exists, including bindings whose value is nil.
-func has(bindings map[string]interface{}, name string) bool {
-	_, ok := bindings[name]
-	return ok
+	return map[Opcode]string{OpAdd: "+", OpSub: "-", OpMultiply: "*", OpDivide: "/", OpRemainder: "%", OpEqual: "==", OpNotEqual: "!=", OpLess: "<", OpLessEqual: "<=", OpGreater: ">", OpGreaterEqual: ">="}[op]
 }
 
 // need verifies that an instruction has the operands it is about to consume.
@@ -417,20 +474,6 @@ func (vm *VM) need(n, start int, op Opcode) error {
 			op, n, plural(n, "value"), len(vm.stack))
 	}
 	return nil
-}
-
-// constantName reads an operand index and requires the referenced constant to
-// be a string. step must validate the operand bytes first.
-func (vm *VM) constantName(start int) (string, error) {
-	index := vm.readOperand()
-	if index >= len(vm.chunk.Constants) {
-		return "", vm.internal(start, "constant %d does not exist", index)
-	}
-	name, ok := vm.chunk.Constants[index].(string)
-	if !ok {
-		return "", vm.internal(start, "constant %d is not a name", index)
-	}
-	return name, nil
 }
 
 // locatedFailure attaches the position of the failing instruction to a
@@ -487,19 +530,6 @@ func (vm *VM) readByte() byte {
 	b := vm.chunk.Code[vm.ip]
 	vm.ip++
 	return b
-}
-
-func (vm *VM) truthy(v interface{}) bool {
-	switch val := v.(type) {
-	case bool:
-		return val
-	case int:
-		return val != 0
-	case string:
-		return val != ""
-	default:
-		return val != nil
-	}
 }
 
 func (vm *VM) readOperand() int {

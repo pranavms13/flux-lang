@@ -1,10 +1,7 @@
 //! rule: BND-REDECLARE
-//! about: a second declaration of a name currently replaces the first in silence
-//! status: planned
-//! milestone: phase-3
-//! specified: static-error B_DUPLICATE_DECLARATION at 9:1..9:10
-//! all: output
-//! stdout: "2\n"
+//! about: same-scope declarations cannot replace an immutable binding
+//! status: implemented
+//! all: static-error B_DUPLICATE_DECLARATION at 6:1..6:10
 let x = 1
 let x = 2
 print(x)

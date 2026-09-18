@@ -96,7 +96,12 @@ func ParseSource(src *source.Source) Result {
 	result := Result{Source: src}
 	tree, err := parserInstance.ParseString(src.Name(), src.Text())
 	if err == nil {
-		result.Program = tree
+		result.Diagnostics = validateIntegers(tree, src)
+		if len(result.Diagnostics) != 0 {
+			result.Partial = tree
+		} else {
+			result.Program = tree
+		}
 		return result
 	}
 	result.Partial = tree

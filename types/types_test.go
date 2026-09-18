@@ -23,7 +23,7 @@ func TestTypeCheckingModes(t *testing.T) {
 		{"subtraction", `print("wrong" - 1)`, "invalid operands", false},
 		{"comparison", `print("wrong" > 1)`, "invalid operands", false},
 		{"known invalid operand", `let f = fn(x) => true + x`, "invalid operands", false},
-		{"condition", `print(if 1 then { 2 } else { 3 })`, "if condition must be bool", true},
+		{"condition", `print(if 1 then { 2 } else { 3 })`, "if condition must be bool", false},
 		{"branches", `let x = if true then { 2 } else { "wrong" }`, "if branches must have same type", true},
 		{"equality", `print(1 == "wrong")`, "cannot compare different types", true},
 		{"list", `let x = [1, "wrong"]`, "list element", false},
@@ -53,6 +53,13 @@ func TestTypeCheckingModes(t *testing.T) {
 				t.Run(mode.name, func(t *testing.T) {
 					tc := types.NewTypeCheckerWithConfig(mode.config)
 					tc.CheckProgram(prog)
+					bindingError := tt.name == "duplicate parameters" || tt.name == "undefined"
+					if bindingError {
+						if !tc.HasErrors() || !strings.Contains(strings.Join(tc.GetErrors(), "\n"), tt.diagnostic) {
+							t.Fatalf("binding error missing: %v", tc.Diagnostics())
+						}
+						return
+					}
 					if !mode.config.Enabled {
 						if tc.HasErrors() || tc.HasWarnings() {
 							t.Fatal("disabled checker emitted diagnostics")

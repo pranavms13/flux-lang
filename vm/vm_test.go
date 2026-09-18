@@ -70,6 +70,8 @@ let xs = [1, 2, 3]
 let d = {"k": 1}
 print(add(xs[0], d["k"]))
 print(if true then { 1 } else { 2 })
+let make = fn(x: int) => { let local = x; fn(): bool => false || (local > 0 && true) }
+print(make(1)())
 `
 	chunk, _ := compile(t, "boundaries.flux", text)
 
@@ -80,6 +82,9 @@ print(if true then { 1 } else { 2 })
 		for ip := 0; ip < len(c.Code); {
 			starts[ip] = true
 			ip += 1 + 4*vm.Opcode(c.Code[ip]).Operands()
+		}
+		if len(c.Locations) != len(starts) {
+			t.Errorf("%s: %d instructions but %d source locations", name, len(starts), len(c.Locations))
 		}
 		if len(c.Locations) == 0 {
 			t.Errorf("%s has no source map", name)
@@ -276,5 +281,30 @@ print(f(1))
 	}
 	if ip != len(chunk.Code) {
 		t.Errorf("walking the chunk ended at %d, want %d", ip, len(chunk.Code))
+	}
+}
+
+func TestPhase3MalformedOperands(t *testing.T) {
+	for _, op := range []vm.Opcode{vm.OpDeclareGlobal, vm.OpDeclareLocal, vm.OpDefineLocal, vm.OpGetLocal, vm.OpGetCapture} {
+		for width := 0; width < 4; width++ {
+			chunk := &vm.Chunk{Code: append([]byte{byte(op)}, make([]byte, width)...)}
+			_, err := run(t, chunk)
+			e, ok := err.(*fault.Error)
+			if !ok || e.Code != diagnostic.CodeInternal {
+				t.Fatalf("%d width %d: %v", op, width, err)
+			}
+		}
+		chunk := &vm.Chunk{Code: []byte{byte(op), 0, 0, 0, 2}, BindingCount: 1}
+		_, err := run(t, chunk)
+		e, ok := err.(*fault.Error)
+		if !ok || e.Code != diagnostic.CodeInternal {
+			t.Fatalf("%d out of bounds: %v", op, err)
+		}
+	}
+	for _, target := range []byte{1, 9} {
+		_, err := run(t, &vm.Chunk{Code: []byte{byte(vm.OpJump), 0, 0, 0, target}})
+		if e, ok := err.(*fault.Error); !ok || e.Code != diagnostic.CodeInternal {
+			t.Fatalf("jump target %d: %v", target, err)
+		}
 	}
 }

@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `VAL-LOGICAL`, `EVL-IF-TRUTHY`, `EVL-IF-BOOL`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.2 (implement short-circuit control flow)
 - Migration: [Truthy conditions](../MIGRATION.md#truthy-conditions)
 

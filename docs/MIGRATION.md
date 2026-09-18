@@ -3,14 +3,16 @@
 Every decision that changes what an existing Flux program does has a section
 here, with the program before and after. A decision that only adds syntax —
 `/`, `%`, unary `-`, `!`, `&&`, `||`, `;`, `let` inside a block — is not listed:
-nothing that parses today means something different afterwards.
+existing valid programs keep their meaning except for the decisions below.
 
 Each section names the [decision](decisions/) it comes from and the
 [specification rule](SPEC.md) it implements. `TestDecisionsAreLinked` fails if a
 decision points at a section that does not exist here.
 
-Nothing in this file has happened yet. These are the changes Phase 3 and Phase 4
-carry out, written down while the reasons are fresh.
+Phase 3 is implemented in this checkout. Phase 4 inference changes remain
+planned. The intended breaking release is **v1.0.0** (no release or tag is
+created by this implementation); development builds continue to identify as
+`dev` until release metadata is supplied.
 
 ## Redeclaring a name
 
@@ -71,7 +73,8 @@ From [D-08](decisions/forward-references.md) — rules `BND-FORWARD-REFERENCE` a
 `BND-SELF-RECURSION`, phase 3.
 
 A function may call itself by the name it is being bound to, if that binding
-carries a return type annotation. An ordinary forward reference to a name
+has a complete signature, from either its variable annotation or all parameter
+and return annotations. An ordinary forward reference to a name
 declared later stays an error, in every mode.
 
 ```flux
@@ -225,3 +228,25 @@ print(f("a"))
 
 The programs affected are the ones that were already wrong. A correct program
 gains earlier and better-placed diagnostics; it does not need to be changed.
+
+## Bytecode and execution limits
+
+Phase 3 emits bytecode format **2**, with int64 constants and resolved binding,
+local and capture operands. Format 1 payloads must be recompiled; decoding an
+unsupported version reports an instruction to recompile. Already-built
+standalone executables retain their bundled runtime and continue to work.
+
+The default limit is 256 active user function calls. Excessive recursion reports
+`R_CALL_DEPTH` at the attempted call, with up to 32 innermost frames rendered.
+Host API users may adjust `runtime.Options.MaxDepth` or `vm.VM.MaxDepth`.
+Mutual recursion and references to later declarations remain unsupported.
+
+Name resolution now runs even with checking disabled. Undefined names, duplicate
+parameters/declarations, and invalid self-initialization are binding errors in
+all modes, before any side effects. Recursive functions need a complete signature
+when checked: annotate the variable with `fn(T) -> R`, or annotate every parameter
+and the return type. Warn-only/disabled retain their usual type-error policy.
+
+Integer literals outside the signed 64-bit range now report `S_INT_RANGE` over
+the full magnitude. `-9223372036854775808` is accepted directly; a parenthesized
+positive `9223372036854775808` is still outside the range.

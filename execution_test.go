@@ -32,7 +32,7 @@ func TestExecutionParity(t *testing.T) {
 		{"closure", `let make = fn(x: int) => fn(y: int): int => x + y let add = make(10) print(add(3))`, "13\n"},
 		{"dict duplicate", `let d = {"a": 1, "a": 2} print(d["a"])`, "2\n"},
 		{"dict evaluation order", `let key = fn(): string => { print("key") "a" } let value = fn(): int => { print("value") 1 } let d = {key(): value()} print(d["a"])`, "key\nvalue\n1\n"},
-		{"empty typed collections", `let xs: [int] = [] let d: {string: int} = {} print(xs) print(d)`, "[]\nmap[]\n"},
+		{"empty typed collections", `let xs: [int] = [] let d: {string: int} = {} print(xs) print(d)`, "[]\n{}\n"},
 		{"collection equality", `print([1, 2] == [1, 2]) print({"a": 1} == {"a": 2})`, "true\nfalse\n"},
 	}
 	for _, tt := range cases {
@@ -135,7 +135,7 @@ func TestRuntimeFailures(t *testing.T) {
 		{`let xs = [1] print(xs["wrong"])`, fault.CodeIndexType, `["wrong"]`},
 		{`let d = {"a": 1} print(d["missing"])`, fault.CodeMissingKey, `["missing"]`},
 		{`print(1 + "wrong")`, fault.CodeOperandType, `+ "wrong"`},
-		{`print(missing)`, fault.CodeUndefinedValue, "missing"},
+		{`print(missing)`, types.CodeUndefinedVariable, "missing"},
 		{`let f = "print" f(1)`, fault.CodeNotCallable, "(1)"},
 	} {
 		t.Run(test.source, func(t *testing.T) {

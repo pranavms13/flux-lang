@@ -1,9 +1,6 @@
 //! rule: EVL-DISPLAY-OPAQUE
-//! about: a void value currently displays as a host placeholder
-//! status: planned
-//! milestone: phase-3
-//! specified: output
-//! specified-stdout: "x\n<void>\n"
+//! about: void displays with a stable placeholder
+//! status: implemented
 //! all: output
-//! stdout: "x\n<nil>\n"
+//! stdout: "x\n<void>\n"
 print(print("x"))

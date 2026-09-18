@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `BND-LET`, `BND-REDECLARE`, `BND-PARAMETER-SCOPE`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.3 (resolve local bindings and capture environments)
 - Migration: [Redeclaring a name](../MIGRATION.md#redeclaring-a-name)
 

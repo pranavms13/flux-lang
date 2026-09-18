@@ -15,21 +15,21 @@ job is to stop the behavior from being changed by accident.
 | # | Decision | Phase | Rules |
 | --- | --- | --- | --- |
 | D-01 | [Top-level expression output](top-level-output.md) | implemented | `EVL-TOP-LEVEL-DISPLAY`, `EVL-PRINT` |
-| D-02 | [Blocks and their result](blocks.md) | 3 | `GRM-BLOCK`, `GRM-BLOCK-DECLARATION`, `EVL-BLOCK-RESULT` |
+| D-02 | [Blocks and their result](blocks.md) | implemented | `GRM-BLOCK`, `GRM-BLOCK-DECLARATION`, `EVL-BLOCK-RESULT` |
 | D-03 | [What `{}` means](empty-braces.md) | implemented | `GRM-EMPTY-BRACES` |
-| D-04 | [Statement boundaries](statement-boundaries.md) | 3 | `LEX-WHITESPACE`, `GRM-ADJACENCY`, `GRM-STATEMENT-SEPARATOR` |
+| D-04 | [Statement boundaries](statement-boundaries.md) | implemented | `LEX-WHITESPACE`, `GRM-ADJACENCY`, `GRM-STATEMENT-SEPARATOR` |
 | D-05 | [Evaluation order](evaluation-order.md) | implemented | the five `EVL-ORDER-…` and `EVL-IF-BRANCH` rules |
-| D-06 | [Bindings are immutable and declared once](bindings.md) | 3 | `BND-LET`, `BND-REDECLARE`, `BND-PARAMETER-SCOPE` |
-| D-07 | [A captured name keeps its binding](closure-lookup.md) | 3 | `BND-CAPTURE`, `BND-CAPTURE-IDENTITY` |
-| D-08 | [Forward references and self-recursion](forward-references.md) | 3 | `BND-FORWARD-REFERENCE`, `BND-SELF-RECURSION` |
-| D-09 | [Integers are 64-bit and checked](integers.md) | 3 | `VAL-INT`, `VAL-INT-OVERFLOW` |
-| D-10 | [Division and remainder](division-and-remainder.md) | 3 | `VAL-DIVIDE` |
-| D-11 | [Unary negation](unary-negation.md) | 3 | `VAL-NEG` |
-| D-12 | [Booleans and conditions](booleans.md) | 3 | `VAL-LOGICAL`, `EVL-IF-TRUTHY`, `EVL-IF-BOOL` |
-| D-13 | [Equality](equality.md) | 3 | `VAL-EQUALITY`, `VAL-EQUALITY-FUNCTION` |
+| D-06 | [Bindings are immutable and declared once](bindings.md) | implemented | `BND-LET`, `BND-REDECLARE`, `BND-PARAMETER-SCOPE` |
+| D-07 | [A captured name keeps its binding](closure-lookup.md) | implemented | `BND-CAPTURE`, `BND-CAPTURE-IDENTITY` |
+| D-08 | [Forward references and self-recursion](forward-references.md) | implemented | `BND-FORWARD-REFERENCE`, `BND-SELF-RECURSION` |
+| D-09 | [Integers are 64-bit and checked](integers.md) | implemented | `VAL-INT`, `VAL-INT-OVERFLOW` |
+| D-10 | [Division and remainder](division-and-remainder.md) | implemented | `VAL-DIVIDE` |
+| D-11 | [Unary negation](unary-negation.md) | implemented | `VAL-NEG` |
+| D-12 | [Booleans and conditions](booleans.md) | implemented | `VAL-LOGICAL`, `EVL-IF-TRUTHY`, `EVL-IF-BOOL` |
+| D-13 | [Equality](equality.md) | implemented | `VAL-EQUALITY`, `VAL-EQUALITY-FUNCTION` |
 | D-14 | [Collections](collections.md) | implemented | the `VAL-LIST-…`, `VAL-DICT-…` and `VAL-IMMUTABLE` rules |
 | D-15 | [No implicit conversion](conversion.md) | implemented | `TYP-NO-COERCION` |
-| D-16 | [How values are displayed](display.md) | 3 | the three `EVL-DISPLAY-…` rules |
+| D-16 | [How values are displayed](display.md) | implemented | the three `EVL-DISPLAY-…` rules |
 | D-17 | [Inference constrains unannotated parameters](inference.md) | 4 | `TYP-INFERRED`, `TYP-INFERENCE-CONSTRAINTS` |
 
 D-01 through D-16 correspond to the decision table in section 6 of

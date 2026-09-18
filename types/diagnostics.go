@@ -5,6 +5,7 @@ import (
 
 	"github.com/pranavms13/flux-lang/ast"
 	"github.com/pranavms13/flux-lang/diagnostic"
+	"github.com/pranavms13/flux-lang/resolver"
 	"github.com/pranavms13/flux-lang/source"
 )
 
@@ -47,10 +48,10 @@ var (
 		"a collection was indexed with the wrong type")
 	CodeNotIndexable = diagnostic.Register("T_NOT_INDEXABLE",
 		"a value that is not a list or dictionary was indexed")
-	CodeUndefinedVariable = diagnostic.Register("B_UNDEFINED_VARIABLE",
-		"a name was used where nothing declares it")
-	CodeDuplicateParameter = diagnostic.Register("B_DUPLICATE_PARAMETER",
-		"a function declares the same parameter name twice")
+	CodeUndefinedVariable  = resolver.CodeUndefined
+	CodeDuplicateParameter = resolver.CodeDuplicateParameter
+	CodeIncomparable       = diagnostic.Register("T_INCOMPARABLE", "equality involves a function or a container holding one")
+	CodeRecursiveSignature = diagnostic.Register("T_RECURSIVE_SIGNATURE", "a recursive function needs a complete signature")
 )
 
 // policy says how the configured mode decides a diagnostic's severity.

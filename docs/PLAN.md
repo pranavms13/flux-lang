@@ -444,7 +444,7 @@ comments declare what it requires, so the file the parser reads is the file a
 reader reads.
 
 - [x] Add `testdata/conformance/` fixtures with source, required phase, configuration,
-      expected output/value, error code, and source span. 98 fixtures across eight
+      expected output/value, error code, and source span. 100 fixtures across eight
       sections; a span is required for every declared failure.
 - [x] Run each current-language fixture against interpreter and VM. Run representative
       fixtures through the real standalone compiler as well.

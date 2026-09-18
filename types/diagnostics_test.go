@@ -23,6 +23,30 @@ func check(t *testing.T, text string, mode types.TypeCheckingMode) (*types.TypeC
 	return checker, result.Source
 }
 
+// TestCollectionDiagnosticsNumberMembersFromOne covers both the second member
+// and later members, where validation iterates over a slice without the first.
+func TestCollectionDiagnosticsNumberMembersFromOne(t *testing.T) {
+	for _, test := range []struct {
+		text    string
+		message string
+	}{
+		{`let xs = [1, "wrong"]`, "list element 2 has type string, expected int"},
+		{`let xs = [1, 2, "wrong"]`, "list element 3 has type string, expected int"},
+		{`let d = {1: 1, "wrong": 2}`, "dictionary key 2 has type string, expected int"},
+		{`let d = {1: 1, 2: 2, "wrong": 3}`, "dictionary key 3 has type string, expected int"},
+		{`let d = {1: 1, 2: "wrong"}`, "dictionary value 2 has type string, expected int"},
+		{`let d = {1: 1, 2: 2, 3: "wrong"}`, "dictionary value 3 has type string, expected int"},
+	} {
+		t.Run(test.text, func(t *testing.T) {
+			checker, _ := check(t, test.text, strict())
+			if got := only(t, checker).Message; got != test.message {
+				t.Errorf("message = %q, want %q", got, test.message)
+			}
+		})
+	}
+}
+
+// strict returns the enabled strict mode shared by diagnostic tests.
 func strict() types.TypeCheckingMode {
 	return types.TypeCheckingMode{Enabled: true, Strict: true}
 }
@@ -226,6 +250,8 @@ func TestModesChangeSeverityAndNothingElse(t *testing.T) {
 	}
 }
 
+// TestDisabledCheckerReportsNothing verifies that disabled checking produces
+// neither diagnostics nor severity flags.
 func TestDisabledCheckerReportsNothing(t *testing.T) {
 	checker, _ := check(t, `let x: int = "hello" print(missing)`, types.TypeCheckingMode{})
 
@@ -234,6 +260,8 @@ func TestDisabledCheckerReportsNothing(t *testing.T) {
 	}
 }
 
+// TestDiagnosticsAreOrderedBySourcePosition checks that checker output follows
+// the offending constructs in source order.
 func TestDiagnosticsAreOrderedBySourcePosition(t *testing.T) {
 	checker, src := check(t, "let a: int = \"first\"\nlet b: string = 2\nprint(missing)\n", strict())
 
@@ -248,6 +276,8 @@ func TestDiagnosticsAreOrderedBySourcePosition(t *testing.T) {
 	}
 }
 
+// TestStringAccessorsCarryPositionsWhenKnown checks location prefixes for
+// legacy callers and unlocated fallback without a source.
 func TestStringAccessorsCarryPositionsWhenKnown(t *testing.T) {
 	checker, _ := check(t, "let a = 1\nlet x: int = \"hello\"", strict())
 
@@ -272,6 +302,8 @@ func TestStringAccessorsCarryPositionsWhenKnown(t *testing.T) {
 	}
 }
 
+// TestLenientNotesExplainTheTolerance verifies that a warning explains the
+// runtime interpretation of a tolerated condition.
 func TestLenientNotesExplainTheTolerance(t *testing.T) {
 	checker, _ := check(t, `print(if 1 then { 2 } else { 3 })`, types.TypeCheckingMode{Enabled: true})
 	d := only(t, checker)
@@ -284,6 +316,8 @@ func TestLenientNotesExplainTheTolerance(t *testing.T) {
 	}
 }
 
+// TestCheckerCodesAreRegisteredInTheRightGroups distinguishes binding failures
+// from type failures in the registry.
 func TestCheckerCodesAreRegisteredInTheRightGroups(t *testing.T) {
 	for code, want := range map[diagnostic.Code]diagnostic.Group{
 		types.CodeAnnotationMismatch: diagnostic.GroupType,
@@ -302,6 +336,9 @@ func TestCheckerCodesAreRegisteredInTheRightGroups(t *testing.T) {
 	}
 }
 
+// TestBuiltinsAndAnnotatedFunctionsReportWithoutParameterProvenance checks
+// that missing declaration spans do not prevent argument diagnostics or create
+// invalid labels.
 func TestBuiltinsAndAnnotatedFunctionsReportWithoutParameterProvenance(t *testing.T) {
 	// print is built in and a function type written as an annotation has no
 	// parameter names, so neither can offer a related location. The diagnostic

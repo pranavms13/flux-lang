@@ -47,6 +47,8 @@ type closure struct {
 	name     string
 }
 
+// label returns the closure name for a call trace, or the anonymous-function
+// label when it was never bound.
 func (c *closure) label() string {
 	if c.name == "" {
 		return fault.Anonymous
@@ -122,6 +124,8 @@ func (r *interpreter) internal(at ast.Positioned, format string, args ...any) er
 	}
 }
 
+// evalExpr evaluates an expression in the current locals and returns the first
+// located failure.
 func (r *interpreter) evalExpr(expr *ast.Expr, local map[string]Value) (Value, error) {
 	switch {
 	case expr.If != nil:
@@ -159,6 +163,8 @@ func (r *interpreter) evalExpr(expr *ast.Expr, local map[string]Value) (Value, e
 	}
 }
 
+// evalPrimary evaluates a base value and then applies calls and indexes in
+// source order.
 func (r *interpreter) evalPrimary(primary *ast.PrimaryExpr, local map[string]Value) (Value, error) {
 	val, err := r.evalBase(primary.Base, local)
 	if err != nil {
@@ -185,6 +191,8 @@ func (r *interpreter) evalPrimary(primary *ast.PrimaryExpr, local map[string]Val
 	return val, nil
 }
 
+// evalBase evaluates a literal, group, block, or collection before any postfix
+// operations.
 func (r *interpreter) evalBase(base *ast.BaseExpr, local map[string]Value) (Value, error) {
 	switch {
 	case base == nil:
@@ -223,6 +231,8 @@ func (r *interpreter) evalBase(base *ast.BaseExpr, local map[string]Value) (Valu
 	return nil, r.internal(base, "base expression matched no grammar alternative")
 }
 
+// evalCall evaluates arguments, checks callability and arity, and adds the
+// call site to failures from the function body.
 func (r *interpreter) evalCall(callee Value, call *ast.CallExpr, local map[string]Value) (Value, error) {
 	args := make([]Value, 0, len(call.Args))
 	for _, argExpr := range call.Args {
@@ -260,6 +270,8 @@ func (r *interpreter) evalCall(callee Value, call *ast.CallExpr, local map[strin
 	}
 }
 
+// evalTerm evaluates a literal or resolves a name from locals before globals,
+// reporting an undefined value at its use.
 func (r *interpreter) evalTerm(term *ast.Term, local map[string]Value) (Value, error) {
 	switch {
 	case term.Bool != nil:
@@ -283,6 +295,8 @@ func (r *interpreter) evalTerm(term *ast.Term, local map[string]Value) (Value, e
 	return nil, r.internal(term, "term matched no grammar alternative")
 }
 
+// evalBlock evaluates expressions in order and returns the last value, or nil
+// when the block is absent or empty.
 func (r *interpreter) evalBlock(block *ast.BlockExpr, local map[string]Value) (Value, error) {
 	if block == nil {
 		return nil, nil
@@ -298,6 +312,8 @@ func (r *interpreter) evalBlock(block *ast.BlockExpr, local map[string]Value) (V
 	return result, nil
 }
 
+// evalAdditive evaluates addition and subtraction left to right, locating
+// failures at the operator application.
 func (r *interpreter) evalAdditive(expr *ast.Additive, local map[string]Value) (Value, error) {
 	value, err := r.evalPrimary(expr.Left, local)
 	if err != nil {
@@ -315,6 +331,8 @@ func (r *interpreter) evalAdditive(expr *ast.Additive, local map[string]Value) (
 	return value, nil
 }
 
+// apply evaluates a binary operation and attaches the AST location to any
+// catalogue failure.
 func (r *interpreter) apply(at ast.Positioned, operator string, left, right Value) (Value, error) {
 	value, err := binaryValue(operator, left, right)
 	if err != nil {
@@ -368,6 +386,8 @@ func indexValue(value, index Value) (Value, error) {
 	}
 }
 
+// binaryValue implements supported binary operators and reports incompatible
+// operands through the shared fault catalogue.
 func binaryValue(operator string, left, right Value) (Value, error) {
 	switch operator {
 	case "+":
@@ -400,6 +420,8 @@ func binaryValue(operator string, left, right Value) (Value, error) {
 	return nil, fault.OperandType(operator, left, right)
 }
 
+// addFrame adds a call site to a runtime fault while preserving other error
+// types.
 func addFrame(err error, function string, call source.Location) error {
 	if failure, ok := err.(*fault.Error); ok {
 		return failure.WithTrace([]fault.Frame{{Function: function, Call: call}})

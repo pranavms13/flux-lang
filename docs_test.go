@@ -63,6 +63,8 @@ func TestEveryRegisteredCodeHasAGroup(t *testing.T) {
 	}
 }
 
+// diagnosticReference generates the Markdown code reference from registered
+// diagnostic groups and descriptions.
 func diagnosticReference() string {
 	byGroup := map[diagnostic.Group][]diagnostic.Code{}
 	for _, code := range diagnostic.Registered() {
@@ -101,6 +103,8 @@ This file is generated from the code registry. To update it, run:
 	return out.String()
 }
 
+// firstDifference describes the first differing line between generated and
+// committed documentation.
 func firstDifference(got, want string) string {
 	gotLines, wantLines := strings.Split(got, "\n"), strings.Split(want, "\n")
 	for i := 0; i < len(gotLines) || i < len(wantLines); i++ {
@@ -112,6 +116,8 @@ func firstDifference(got, want string) string {
 	return ""
 }
 
+// at returns a line for comparison, using an end-of-file marker when the line
+// is absent.
 func at(lines []string, i int) string {
 	if i < len(lines) {
 		return lines[i]

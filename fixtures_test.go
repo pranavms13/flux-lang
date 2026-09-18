@@ -49,6 +49,8 @@ func TestFixtureManifestCoversExamples(t *testing.T) {
 	}
 }
 
+// TestFixtureManifestIsCoherent validates entries and retains coverage of each
+// fixture kind in the manifest.
 func TestFixtureManifestIsCoherent(t *testing.T) {
 	for _, fixture := range fixtures.Manifest {
 		t.Run(fixture.Name(), func(t *testing.T) {
@@ -70,6 +72,8 @@ func TestFixtureManifestIsCoherent(t *testing.T) {
 	}
 }
 
+// TestFixtureConfigsSelectTheDeclaredMode checks that fixture configurations
+// enable the checking mode named by the manifest.
 func TestFixtureConfigsSelectTheDeclaredMode(t *testing.T) {
 	for _, fixture := range fixtures.Configs() {
 		t.Run(fixture.Name(), func(t *testing.T) {
@@ -119,6 +123,8 @@ func TestFixturePrograms(t *testing.T) {
 	}
 }
 
+// assertOutcome verifies output or a located runtime failure against a fixture
+// outcome for one mode and backend.
 func assertOutcome(t *testing.T, fixture fixtures.Fixture, mode fixtures.Mode, backend, text string) {
 	t.Helper()
 	want := fixture.Outcome(mode)
@@ -153,6 +159,8 @@ func assertOutcome(t *testing.T, fixture fixtures.Fixture, mode fixtures.Mode, b
 	}
 }
 
+// assertStatic verifies expected static diagnostics and rejects unexpected
+// checker messages.
 func assertStatic(t *testing.T, want fixtures.Outcome, fixture fixtures.Fixture, mode fixtures.Mode, reported []string) {
 	t.Helper()
 	if want != fixtures.OutcomeStaticError {
@@ -173,4 +181,6 @@ func execute(prog *ast.Program, src *source.Source, backend string) (string, err
 	return capture(&out, vm.NewWithOutput(chunk, &out).Run())
 }
 
+// capture returns a backend output buffer and its execution error in the
+// shared runner shape.
 func capture(out *bytes.Buffer, err error) (string, error) { return out.String(), err }

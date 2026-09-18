@@ -85,6 +85,8 @@ func (r Renderer) JSONFailure(failure *fault.Error) ([]byte, error) {
 	}, "", "  ")
 }
 
+// jsonOf converts a diagnostic to the JSON schema, resolving only spans
+// belonging to the configured source.
 func (r Renderer) jsonOf(d diagnostic.Diagnostic) jsonDiagnostic {
 	entry := jsonDiagnostic{
 		Code:     d.Code.String(),
@@ -103,6 +105,8 @@ func (r Renderer) jsonOf(d diagnostic.Diagnostic) jsonDiagnostic {
 	return entry
 }
 
+// resolve locates a span in the configured snapshot, or returns an unknown
+// location when the source does not match.
 func (r Renderer) resolve(span source.Span) source.Location {
 	if r.Source == nil || !span.IsValid() || span.SourceID != r.Source.ID() {
 		return source.Location{}
@@ -110,6 +114,8 @@ func (r Renderer) resolve(span source.Span) source.Location {
 	return r.Source.Locate(span)
 }
 
+// locationJSON converts a valid location to JSON fields, returning nil so
+// unavailable locations are omitted.
 func locationJSON(location source.Location) *jsonLocation {
 	if !location.IsValid() {
 		return nil

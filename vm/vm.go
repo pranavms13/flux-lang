@@ -140,7 +140,13 @@ func (vm *VM) Run() error {
 	return nil
 }
 
+// step validates operand availability and executes one instruction, reporting
+// failures at the instruction start.
 func (vm *VM) step(op Opcode, start int) error {
+	// Validate the entire operand before any opcode reads it or changes state.
+	if len(vm.chunk.Code)-vm.ip < 4*op.Operands() {
+		return vm.internal(start, "instruction at %d is missing its operand", start)
+	}
 	switch op {
 	case OpConstant:
 		index := vm.readOperand()
@@ -275,6 +281,8 @@ func (vm *VM) step(op Opcode, start int) error {
 	return nil
 }
 
+// call consumes a callee and its arguments, runs a closure or builtin, and
+// pushes the result while preserving call traces on failure.
 func (vm *VM) call(nargs, start int) error {
 	if err := vm.need(nargs+1, start, OpCall); err != nil {
 		return err
@@ -341,6 +349,8 @@ func indexValue(value, index interface{}) (interface{}, error) {
 	}
 }
 
+// arithmetic implements addition, subtraction, and ordering with shared
+// catalogue errors for incompatible values.
 func arithmetic(op Opcode, a, b interface{}) (interface{}, error) {
 	switch op {
 	case OpAdd:
@@ -373,6 +383,8 @@ func arithmetic(op Opcode, a, b interface{}) (interface{}, error) {
 	return nil, fault.OperandType(operatorName(op), a, b)
 }
 
+// operatorName translates a binary opcode to the operator spelling used in
+// Flux diagnostics.
 func operatorName(op Opcode) string {
 	switch op {
 	case OpAdd:
@@ -390,6 +402,7 @@ func operatorName(op Opcode) string {
 	}
 }
 
+// has tests whether a binding exists, including bindings whose value is nil.
 func has(bindings map[string]interface{}, name string) bool {
 	_, ok := bindings[name]
 	return ok
@@ -406,6 +419,8 @@ func (vm *VM) need(n, start int, op Opcode) error {
 	return nil
 }
 
+// constantName reads an operand index and requires the referenced constant to
+// be a string. step must validate the operand bytes first.
 func (vm *VM) constantName(start int) (string, error) {
 	index := vm.readOperand()
 	if index >= len(vm.chunk.Constants) {
@@ -438,6 +453,8 @@ func (vm *VM) internal(start int, format string, args ...interface{}) error {
 	}
 }
 
+// addFrame appends a call site to a runtime fault and leaves other errors
+// unchanged.
 func addFrame(err error, function string, call source.Location) error {
 	if failure, ok := err.(*fault.Error); ok {
 		return failure.WithTrace([]fault.Frame{{Function: function, Call: call}})
@@ -445,6 +462,7 @@ func addFrame(err error, function string, call source.Location) error {
 	return err
 }
 
+// plural uses the singular noun only when the count is one.
 func plural(n int, noun string) string {
 	if n == 1 {
 		return noun

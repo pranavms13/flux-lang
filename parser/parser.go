@@ -157,6 +157,8 @@ func translate(err error, src *source.Source) diagnostic.Diagnostic {
 	return diagnostic.Internal(src.Whole(), "parser reported an unrecognized failure: %v", err)
 }
 
+// fromUnexpectedToken locates an unexpected token or reports an unfinished
+// construct at the end of the source.
 func fromUnexpectedToken(err *participle.UnexpectedTokenError, src *source.Source) diagnostic.Diagnostic {
 	start := err.Unexpected.Pos.Offset
 	span := src.Span(start, start+len(err.Unexpected.Value))
@@ -184,6 +186,8 @@ func expectation(err *participle.UnexpectedTokenError) string {
 	return ", expected " + message[open+len(" (expected "):len(message)-1]
 }
 
+// describeToken quotes a token value for a diagnostic, falling back to a
+// generic label for an empty value.
 func describeToken(token participlelexer.Token) string {
 	if token.Value == "" {
 		return "token"
@@ -205,4 +209,5 @@ func spanOfRune(src *source.Source, start int) source.Span {
 	return src.Span(start, start+width)
 }
 
+// isRuneStart reports whether a byte is not a UTF-8 continuation byte.
 func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }

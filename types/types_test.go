@@ -8,6 +8,8 @@ import (
 	"github.com/pranavms13/flux-lang/types"
 )
 
+// TestTypeCheckingModes checks rejection, warning, and disabled behavior for
+// representative programs under each checking mode.
 func TestTypeCheckingModes(t *testing.T) {
 	cases := []struct {
 		name, source, diagnostic string

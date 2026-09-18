@@ -107,6 +107,8 @@ const bundleGoMod = `module github.com/pranavms13/flux-lang
 go 1.23.2
 `
 
+// main runs the CLI, writes failures to stderr, and exits with the status for
+// that failure category.
 func main() {
 	// Diagnostics go to stderr; whatever the program printed has already gone
 	// to stdout, so a pipeline reads output without error text mixed into it.
@@ -120,8 +122,11 @@ func main() {
 // mistake in a Flux program.
 type usageError struct{ message string }
 
+// Error returns the usage message without adding a source location.
 func (e *usageError) Error() string { return e.message }
 
+// usagef formats an invalid-command error that receives the tool-failure exit
+// status.
 func usagef(format string, args ...any) error {
 	return &usageError{message: fmt.Sprintf(format, args...)}
 }
@@ -153,6 +158,8 @@ func report(err error) string {
 	return "error: " + err.Error()
 }
 
+// runCLI dispatches commands through parsing, checking, and execution or
+// compilation, recovering unexpected panics as internal defects.
 func runCLI(args []string) (err error) {
 	// Both engines return their failures, so nothing a program does should
 	// reach this. Anything that does is a defect in Flux, and is reported as
@@ -242,6 +249,8 @@ func runCLI(args []string) (err error) {
 	return nil
 }
 
+// compileExecutable builds a standalone VM executable in dist, optionally
+// embeds source text, and always removes its temporary build module.
 func compileExecutable(chunk *vm.Chunk, src *source.Source, debug bool) (string, error) {
 	var sources map[string]string
 	if debug {

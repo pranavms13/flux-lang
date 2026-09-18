@@ -8,8 +8,8 @@
 // the two agree without comparing prose.
 //
 // The package is part of the bundle a generated executable is built from, so it
-// depends only on source and diagnostic, which have no dependencies of their
-// own.
+// depends only on source and diagnostic. Source has no internal dependencies,
+// and diagnostic depends only on source.
 package fault
 
 import (
@@ -69,6 +69,7 @@ type Error struct {
 	Trace []Frame
 }
 
+// Error formats the message with a source position when one is available.
 func (e *Error) Error() string {
 	if !e.Where.IsValid() {
 		return e.Message
@@ -89,14 +90,13 @@ func (e *Error) Diagnostic() diagnostic.Diagnostic {
 	return d
 }
 
+// span rebuilds the original byte range, returning NoSpan when its source
+// identity is unknown.
 func (e *Error) span() source.Span {
-	if !e.Where.IsValid() {
+	if !e.Where.IsValid() || e.Where.SourceID == source.NoSource {
 		return source.NoSpan
 	}
-	// The span is rebuilt for a consumer that still has the source. The
-	// identifier is the first source, which is the only one a single-file
-	// program has; a multi-source build resolves it from the location's file.
-	return source.Span{SourceID: 1, Start: e.Where.Start, End: e.Where.End}
+	return source.Span{SourceID: e.Where.SourceID, Start: e.Where.Start, End: e.Where.End}
 }
 
 // WithTrace returns a copy of the failure carrying a call trace. An engine
@@ -126,6 +126,8 @@ func (e *Error) At(where source.Location) *Error {
 	return &copied
 }
 
+// newError creates an unlocated catalogue failure for an engine to locate at
+// the failing operation.
 func newError(code diagnostic.Code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
@@ -209,6 +211,7 @@ func render(value any) string {
 	return fmt.Sprintf("%v", value)
 }
 
+// plural uses the singular noun only when the count is one.
 func plural(n int, noun string) string {
 	if n == 1 {
 		return noun

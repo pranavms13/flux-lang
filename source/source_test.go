@@ -7,6 +7,8 @@ import (
 	"github.com/pranavms13/flux-lang/source"
 )
 
+// TestPositionCountsEachColumnUnitSeparately distinguishes byte, rune, UTF-16,
+// and tab-expanded display columns.
 func TestPositionCountsEachColumnUnitSeparately(t *testing.T) {
 	// The line mixes a combining mark (é as e + U+0301), a supplementary-plane
 	// emoji, and a tab so that every column unit disagrees.
@@ -35,6 +37,8 @@ func TestPositionCountsEachColumnUnitSeparately(t *testing.T) {
 	}
 }
 
+// TestPositionInsideRuneReportsThatRunesColumn checks that offsets inside a
+// multibyte rune resolve to its starting column.
 func TestPositionInsideRuneReportsThatRunesColumn(t *testing.T) {
 	src := source.New(1, "unicode.flux", "\U0001F600x")
 	// Offsets 0 through 3 all fall within the emoji; none of them may report a
@@ -49,6 +53,8 @@ func TestPositionInsideRuneReportsThatRunesColumn(t *testing.T) {
 	}
 }
 
+// TestTabExpansionHonorsStopWidth checks custom tab stops and the default used
+// for invalid widths.
 func TestTabExpansionHonorsStopWidth(t *testing.T) {
 	src := source.New(1, "tabs.flux", "\tab\tc")
 	for _, test := range []struct {
@@ -71,6 +77,8 @@ func TestTabExpansionHonorsStopWidth(t *testing.T) {
 	}
 }
 
+// TestCRLFLinesExcludeTheTerminator verifies line text and positions across
+// CRLF boundaries.
 func TestCRLFLinesExcludeTheTerminator(t *testing.T) {
 	src := source.New(1, "crlf.flux", "let a = 1\r\nlet b = 2\r\n")
 
@@ -92,6 +100,8 @@ func TestCRLFLinesExcludeTheTerminator(t *testing.T) {
 	}
 }
 
+// TestEmptySourceHasOneLineAndOnePosition pins line, position, and EOF
+// behavior for an empty snapshot.
 func TestEmptySourceHasOneLineAndOnePosition(t *testing.T) {
 	src := source.New(1, "empty.flux", "")
 
@@ -113,6 +123,8 @@ func TestEmptySourceHasOneLineAndOnePosition(t *testing.T) {
 	}
 }
 
+// TestEOFSpanPointsPastTheLastCharacter checks that EOF is an empty span at
+// the source length.
 func TestEOFSpanPointsPastTheLastCharacter(t *testing.T) {
 	const text = "let a = 1\nlet b ="
 	src := source.New(1, "eof.flux", text)
@@ -130,6 +142,8 @@ func TestEOFSpanPointsPastTheLastCharacter(t *testing.T) {
 	}
 }
 
+// TestMultilineSpanCoversEveryLineItTouches checks extraction and endpoint
+// positions for a range crossing a newline.
 func TestMultilineSpanCoversEveryLineItTouches(t *testing.T) {
 	const text = "let f = fn(a) =>\n  a + 1\nf(2)\n"
 	src := source.New(1, "multiline.flux", text)
@@ -147,6 +161,8 @@ func TestMultilineSpanCoversEveryLineItTouches(t *testing.T) {
 	}
 }
 
+// TestSpanConstructionClampsAndOrders checks that reversed or out-of-range
+// endpoints produce bounded, ordered spans.
 func TestSpanConstructionClampsAndOrders(t *testing.T) {
 	src := source.New(1, "clamp.flux", "abc")
 
@@ -161,6 +177,8 @@ func TestSpanConstructionClampsAndOrders(t *testing.T) {
 	}
 }
 
+// TestSpanPredicates checks validity, half-open containment, and overlap
+// within a single source.
 func TestSpanPredicates(t *testing.T) {
 	a := source.Span{SourceID: 1, Start: 4, End: 8}
 	empty := source.Span{SourceID: 1, Start: 4, End: 4}
@@ -191,6 +209,8 @@ func TestSpanPredicates(t *testing.T) {
 	}
 }
 
+// TestSpanUnion checks merged ranges, invalid spans, and rejection of spans
+// from different sources.
 func TestSpanUnion(t *testing.T) {
 	a := source.Span{SourceID: 1, Start: 4, End: 8}
 	b := source.Span{SourceID: 1, Start: 12, End: 14}
@@ -209,6 +229,8 @@ func TestSpanUnion(t *testing.T) {
 	}
 }
 
+// TestCompareOrdersBySourceThenStartThenEnd pins the ordering used for
+// deterministic diagnostics.
 func TestCompareOrdersBySourceThenStartThenEnd(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -227,6 +249,8 @@ func TestCompareOrdersBySourceThenStartThenEnd(t *testing.T) {
 	}
 }
 
+// TestLineRangeIncludesTerminatorAndRejectsMissingLines checks raw line
+// boundaries and invalid line requests.
 func TestLineRangeIncludesTerminatorAndRejectsMissingLines(t *testing.T) {
 	src := source.New(1, "lines.flux", "ab\ncd")
 
@@ -245,6 +269,8 @@ func TestLineRangeIncludesTerminatorAndRejectsMissingLines(t *testing.T) {
 	}
 }
 
+// TestTextOfRejectsSpansFromAnotherSource prevents offsets from one snapshot
+// from extracting text from another.
 func TestTextOfRejectsSpansFromAnotherSource(t *testing.T) {
 	src := source.New(1, "a.flux", "abcdef")
 	if got := src.TextOf(source.Span{SourceID: 2, Start: 0, End: 3}); got != "" {
@@ -255,6 +281,8 @@ func TestTextOfRejectsSpansFromAnotherSource(t *testing.T) {
 	}
 }
 
+// TestSnapshotExposesItsOriginalBytesAndName checks that source identity and
+// original content are retained.
 func TestSnapshotExposesItsOriginalBytesAndName(t *testing.T) {
 	const text = "let a = 1\n"
 	src := source.New(7, "display.flux", text)
@@ -273,6 +301,8 @@ func TestSnapshotExposesItsOriginalBytesAndName(t *testing.T) {
 	}
 }
 
+// TestMapAssignsDistinctIdentifiers checks unique source IDs and lookup
+// failure for unknown IDs.
 func TestMapAssignsDistinctIdentifiers(t *testing.T) {
 	m := source.NewMap()
 	first := m.Add("a.flux", "let a = 1")
@@ -300,6 +330,8 @@ func TestMapAssignsDistinctIdentifiers(t *testing.T) {
 	}
 }
 
+// TestMapKeepsSnapshotsOfTheSameFileSeparate verifies that repeated filenames
+// do not collapse distinct source revisions.
 func TestMapKeepsSnapshotsOfTheSameFileSeparate(t *testing.T) {
 	m := source.NewMap()
 	before := m.Add("edit.flux", "let a = 1")
@@ -313,6 +345,8 @@ func TestMapKeepsSnapshotsOfTheSameFileSeparate(t *testing.T) {
 	}
 }
 
+// TestMapIsSafeForConcurrentUse checks unique IDs and consistent lookups while
+// sources are added concurrently.
 func TestMapIsSafeForConcurrentUse(t *testing.T) {
 	m := source.NewMap()
 	const writers = 8

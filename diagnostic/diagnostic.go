@@ -250,6 +250,7 @@ func Tool(op, path string, err error) *ToolError {
 	return &ToolError{Op: op, Path: path, Err: err}
 }
 
+// Error formats a tool operation with its optional path and underlying cause.
 func (e *ToolError) Error() string {
 	switch {
 	case e.Path != "" && e.Err != nil:
@@ -306,7 +307,8 @@ type key struct {
 // that is already present, meaning it matches an existing one in code,
 // severity, message, and primary span, returns the existing reference instead
 // of duplicating it: the checker can reach the same node twice, and reporting
-// one problem twice is never useful.
+// one problem twice is never useful. An independent report also makes a
+// previously suppressed consequence reportable.
 func (b *Bag) Add(diagnostic Diagnostic) Ref {
 	return b.AddCausedBy(diagnostic, NoCause)
 }
@@ -322,6 +324,9 @@ func (b *Bag) AddCausedBy(diagnostic Diagnostic, cause Ref) Ref {
 		primary:  diagnostic.Primary,
 	}
 	if existing, ok := b.seen[identity]; ok {
+		if cause == NoCause {
+			b.entries[int(existing)-1].cause = NoCause
+		}
 		return existing
 	}
 	if b.seen == nil {
@@ -351,6 +356,8 @@ func (b *Bag) All() []Diagnostic { return b.collect(false) }
 // full cascade reads this; ordinary output does not.
 func (b *Bag) AllIncludingSuppressed() []Diagnostic { return b.collect(true) }
 
+// collect selects reportable entries, optionally includes suppressed
+// consequences, and sorts a copy for stable output.
 func (b *Bag) collect(includeSuppressed bool) []Diagnostic {
 	selected := make([]entry, 0, len(b.entries))
 	for _, e := range b.entries {
@@ -387,6 +394,7 @@ func (b *Bag) HasErrors() bool { return b.has(SeverityError) }
 // HasWarnings reports whether any reportable diagnostic is a warning.
 func (b *Bag) HasWarnings() bool { return b.has(SeverityWarning) }
 
+// has reports whether an unsuppressed entry has the requested severity.
 func (b *Bag) has(severity Severity) bool {
 	for _, e := range b.entries {
 		if e.cause == NoCause && e.diagnostic.Severity == severity {

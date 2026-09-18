@@ -54,6 +54,8 @@ func New(id SourceID, name, text string) *Source {
 	return &Source{id: id, name: name, text: text, lineStarts: indexLines(text)}
 }
 
+// indexLines records byte offsets after each newline, including the start of
+// an empty final line.
 func indexLines(text string) []int {
 	starts := make([]int, 1, 1+len(text)/32)
 	for offset := 0; offset < len(text); offset++ {
@@ -108,6 +110,8 @@ func (s *Source) TextOf(span Span) string {
 	return s.text[s.clamp(span.Start):s.clamp(span.End)]
 }
 
+// clamp bounds a byte offset to the source, including the end-of-file
+// position.
 func (s *Source) clamp(offset int) int {
 	if offset < 0 {
 		return 0
@@ -144,6 +148,8 @@ func (s *Source) LineText(line int) string {
 	return trimSuffix(text, "\r")
 }
 
+// trimSuffix removes one matching suffix and otherwise returns the text
+// unchanged.
 func trimSuffix(text, suffix string) string {
 	if len(text) >= len(suffix) && text[len(text)-len(suffix):] == suffix {
 		return text[:len(text)-len(suffix)]
@@ -204,6 +210,7 @@ func (s *Source) alignToRuneStart(offset int) int {
 	return offset
 }
 
+// utf16Len returns the number of UTF-16 code units needed to represent a rune.
 func utf16Len(r rune) int {
 	if r1, _ := utf16.EncodeRune(r); r1 == utf8.RuneError {
 		return 1
@@ -296,6 +303,8 @@ func Compare(a, b Span) int {
 	}
 }
 
+// cmpInt returns -1, 0, or 1 for integer ordering without subtracting its
+// operands.
 func cmpInt(a, b int) int {
 	switch {
 	case a < b:
@@ -357,6 +366,9 @@ func (m *Map) Len() int {
 // The byte range is kept as well, for a tool that does still have the source
 // and wants to show a snippet.
 type Location struct {
+	// SourceID preserves the originating snapshot's identity for consumers
+	// that rebuild spans. It may be NoSource for display-only locations.
+	SourceID SourceID
 	// File is the display filename, never an absolute build-machine path.
 	File string
 	// Line is 1-based.
@@ -387,10 +399,11 @@ func (s *Source) Locate(span Span) Location {
 	}
 	position := s.Position(span.Start)
 	return Location{
-		File:   s.name,
-		Line:   position.Line,
-		Column: position.Display,
-		Start:  s.clamp(span.Start),
-		End:    s.clamp(span.End),
+		SourceID: s.id,
+		File:     s.name,
+		Line:     position.Line,
+		Column:   position.Display,
+		Start:    s.clamp(span.Start),
+		End:      s.clamp(span.End),
 	}
 }

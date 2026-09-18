@@ -3,6 +3,7 @@ package vm_test
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/pranavms13/flux-lang/vm"
 )
 
+// compile parses a named test source and emits bytecode with instruction
+// locations.
 func compile(t *testing.T, name, text string) (*vm.Chunk, *source.Source) {
 	t.Helper()
 	result := parser.ParseSource(source.New(1, name, text))
@@ -23,6 +26,8 @@ func compile(t *testing.T, name, text string) (*vm.Chunk, *source.Source) {
 	return compiler.NewFluxCompilerForSource(result.Source).Compile(result.Program), result.Source
 }
 
+// run executes a chunk with captured output and returns its failure for
+// assertions.
 func run(t *testing.T, chunk *vm.Chunk) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
@@ -102,6 +107,8 @@ print(if true then { 1 } else { 2 })
 	}
 }
 
+// TestNestedFunctionChunksCarryTheirOwnNameAndMap checks named and anonymous
+// trace labels and independent nested source maps.
 func TestNestedFunctionChunksCarryTheirOwnNameAndMap(t *testing.T) {
 	chunk, _ := compile(t, "nested.flux", "let add = fn(a, b) => a + b\nprint(add(1, 2))\n")
 
@@ -125,6 +132,8 @@ func TestNestedFunctionChunksCarryTheirOwnNameAndMap(t *testing.T) {
 	}
 }
 
+// TestStackShortfallIsReportedAsAnInternalDefect verifies that insufficient
+// stack values return an internal fault.
 func TestStackShortfallIsReportedAsAnInternalDefect(t *testing.T) {
 	// OpAdd with nothing on the stack cannot be produced by the compiler, so
 	// reaching it means Flux is broken, not the program.
@@ -140,6 +149,8 @@ func TestStackShortfallIsReportedAsAnInternalDefect(t *testing.T) {
 	}
 }
 
+// TestUnknownOpcodeIsAnInternalDefect checks that invalid bytecode returns a
+// structured internal failure.
 func TestUnknownOpcodeIsAnInternalDefect(t *testing.T) {
 	_, err := run(t, &vm.Chunk{Code: []byte{200}})
 	failure, ok := err.(*fault.Error)
@@ -148,6 +159,52 @@ func TestUnknownOpcodeIsAnInternalDefect(t *testing.T) {
 	}
 }
 
+// TestTruncatedOperandsReturnInternalFailures runs malformed decoded chunks
+// for every operand-bearing opcode, at each possible truncated operand length.
+func TestTruncatedOperandsReturnInternalFailures(t *testing.T) {
+	src := source.New(7, "truncated.flux", "broken")
+	where := src.Locate(src.Whole())
+	for _, op := range []vm.Opcode{
+		vm.OpConstant, vm.OpDict, vm.OpArray, vm.OpDefineGlobal, vm.OpGetGlobal,
+		vm.OpJumpIfFalse, vm.OpJumpIfTrue, vm.OpJump, vm.OpCall, vm.OpClosure,
+	} {
+		for size := 0; size < 4; size++ {
+			t.Run(fmt.Sprintf("opcode_%d/bytes_%d", op, size), func(t *testing.T) {
+				// A preceding instruction ensures the fault reports the start
+				// of the broken instruction, not the operand or chunk start.
+				code := []byte{byte(vm.OpConstant), 0, 0, 0, 0, byte(op)}
+				code = append(code, make([]byte, size)...)
+				chunk := &vm.Chunk{
+					Code: code, Constants: []interface{}{true},
+					Locations: map[int]source.Location{5: where},
+				}
+				encoded, err := vm.Encode(chunk, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				program, err := vm.Decode(encoded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = run(t, program.Chunk)
+				failure, ok := err.(*fault.Error)
+				if !ok || failure.Code != diagnostic.CodeInternal {
+					t.Fatalf("got %v, want an internal failure", err)
+				}
+				if failure.Where != where || failure.Diagnostic().Primary != src.Whole() {
+					t.Errorf("failure lost its source location: %+v", failure)
+				}
+				if !strings.Contains(failure.Message, "operand") {
+					t.Errorf("failure does not identify the missing operand: %q", failure.Message)
+				}
+			})
+		}
+	}
+}
+
+// TestProgramFormatRoundTripsAndRefusesOtherVersions checks executable nested
+// chunks and embedded sources after serialization, plus rejection of
+// unsupported versions and absent code.
 func TestProgramFormatRoundTripsAndRefusesOtherVersions(t *testing.T) {
 	chunk, src := compile(t, "format.flux", "let f = fn(x) => x\nprint(f(1))\n")
 
@@ -205,6 +262,8 @@ func TestProgramFormatRoundTripsAndRefusesOtherVersions(t *testing.T) {
 	}
 }
 
+// TestOperandTableMatchesWhatTheCompilerEmits checks that operand widths walk
+// emitted instructions exactly to the end of a chunk.
 func TestOperandTableMatchesWhatTheCompilerEmits(t *testing.T) {
 	// Walking a chunk with the operand table must land exactly on its end. If
 	// the table is wrong for any opcode the compiler emits, this overshoots.

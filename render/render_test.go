@@ -12,6 +12,8 @@ import (
 	"github.com/pranavms13/flux-lang/source"
 )
 
+// TestSnippetUnderlinesTheOffendingText pins the complete diagnostic headline,
+// source snippet, notes, and help layout.
 func TestSnippetUnderlinesTheOffendingText(t *testing.T) {
 	const text = "let add = fn(a: int, b: int): int => a + b\nprint(add(\"5\", 10))\n"
 	src := source.New(1, "main.flux", text)
@@ -32,6 +34,8 @@ func TestSnippetUnderlinesTheOffendingText(t *testing.T) {
 	}
 }
 
+// TestCaretAlignsWithExpandedTabs checks caret alignment using the same tab
+// stops as source display columns.
 func TestCaretAlignsWithExpandedTabs(t *testing.T) {
 	// The line is indented with tabs. Printing it raw and counting columns
 	// separately is how a caret ends up under the wrong character.
@@ -58,6 +62,8 @@ func TestCaretAlignsWithExpandedTabs(t *testing.T) {
 	}
 }
 
+// TestNoColorByDefaultAndStyledWhenAsked verifies stable plain text and
+// equivalent content when ANSI styling is enabled.
 func TestNoColorByDefaultAndStyledWhenAsked(t *testing.T) {
 	src := source.New(1, "color.flux", "let x = 1\n")
 	d := diagnostic.Error("T_ANNOTATION_MISMATCH", src.Span(8, 9), "a mismatch")
@@ -77,6 +83,8 @@ func TestNoColorByDefaultAndStyledWhenAsked(t *testing.T) {
 	}
 }
 
+// stripANSI removes styling escapes so tests can compare rendered content
+// independently of color.
 func stripANSI(text string) string {
 	for {
 		start := strings.Index(text, "\x1b[")
@@ -91,6 +99,8 @@ func stripANSI(text string) string {
 	}
 }
 
+// TestColorEnabledRespectsNoColorAndNonTerminals checks that environment
+// overrides and redirected output disable styling.
 func TestColorEnabledRespectsNoColorAndNonTerminals(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	if render.ColorEnabled(nil) {
@@ -103,6 +113,8 @@ func TestColorEnabledRespectsNoColorAndNonTerminals(t *testing.T) {
 	}
 }
 
+// TestDiagnosticWithoutASourceHasNoSnippet checks useful source-less output
+// without fabricated source text.
 func TestDiagnosticWithoutASourceHasNoSnippet(t *testing.T) {
 	d := diagnostic.Error("T_ANNOTATION_MISMATCH", source.Span{SourceID: 1, Start: 0, End: 4}, "a mismatch").
 		WithNote("a note").
@@ -115,6 +127,8 @@ func TestDiagnosticWithoutASourceHasNoSnippet(t *testing.T) {
 	}
 }
 
+// TestSpanFromAnotherSourceIsNotDrawn prevents a diagnostic span from being
+// applied to an unrelated snapshot.
 func TestSpanFromAnotherSourceIsNotDrawn(t *testing.T) {
 	src := source.New(1, "a.flux", "let x = 1\n")
 	d := diagnostic.Error("T_ANNOTATION_MISMATCH", source.Span{SourceID: 2, Start: 0, End: 3}, "elsewhere")
@@ -125,6 +139,8 @@ func TestSpanFromAnotherSourceIsNotDrawn(t *testing.T) {
 	}
 }
 
+// TestMultilineSpanUnderlinesTheFirstLine verifies that underlining stops at
+// the end of the displayed line.
 func TestMultilineSpanUnderlinesTheFirstLine(t *testing.T) {
 	const text = "let x = if true then {\n  1\n} else {\n  2\n}\n"
 	src := source.New(1, "multiline.flux", text)
@@ -145,6 +161,8 @@ func TestMultilineSpanUnderlinesTheFirstLine(t *testing.T) {
 	}
 }
 
+// TestFailureRendersTheCallTrace checks the fault headline, snippet, and
+// ordered call-site frames.
 func TestFailureRendersTheCallTrace(t *testing.T) {
 	const text = "let inner = fn(x) => x + \"no\"\nlet outer = fn(y) => inner(y)\nprint(outer(1))\n"
 	src := source.New(1, "trace.flux", text)
@@ -172,6 +190,34 @@ func TestFailureRendersTheCallTrace(t *testing.T) {
 	}
 }
 
+// TestFailureSnippetRequiresMatchingSource keeps a failure's headline and
+// snippet tied to the same file, including when source text is unavailable.
+func TestFailureSnippetRequiresMatchingSource(t *testing.T) {
+	src := source.New(7, "failure.flux", "missing")
+	failure := fault.UndefinedValue("missing").At(src.Locate(src.Whole()))
+	for _, test := range []struct {
+		name    string
+		src     *source.Source
+		snippet bool
+	}{
+		{"matching", src, true},
+		{"different file", source.New(7, "other.flux", "unrelated"), false},
+		{"no source", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := render.Renderer{Source: test.src}.Failure(failure)
+			if !strings.HasPrefix(got, "failure.flux:1:1: error[R_UNDEFINED_VALUE]") {
+				t.Errorf("failure lost its location: %q", got)
+			}
+			if strings.Contains(got, "1 | ") != test.snippet {
+				t.Errorf("snippet present = %t, want %t: %q", strings.Contains(got, "1 | "), test.snippet, got)
+			}
+		})
+	}
+}
+
+// TestInternalFailureSaysItIsAFluxBug verifies that internal failures are
+// identified as implementation defects.
 func TestInternalFailureSaysItIsAFluxBug(t *testing.T) {
 	failure := &fault.Error{Code: diagnostic.CodeInternal, Message: "unknown opcode 99"}
 	got := render.Renderer{}.Failure(failure)
@@ -184,6 +230,8 @@ func TestInternalFailureSaysItIsAFluxBug(t *testing.T) {
 	}
 }
 
+// TestToolErrorLooksUnlikeALanguageError checks that tool failures have no
+// language code or source caret.
 func TestToolErrorLooksUnlikeALanguageError(t *testing.T) {
 	got := render.Renderer{}.ToolError(diagnostic.Tool("read source file", "missing.flux", errNotExist{}))
 
@@ -197,8 +245,11 @@ func TestToolErrorLooksUnlikeALanguageError(t *testing.T) {
 
 type errNotExist struct{}
 
+// Error supplies a deterministic missing-file message for renderer tests.
 func (errNotExist) Error() string { return "no such file or directory" }
 
+// TestJSONIsVersionedAndCarriesBothUnits checks the schema version, byte
+// offsets, and display columns for structured diagnostics.
 func TestJSONIsVersionedAndCarriesBothUnits(t *testing.T) {
 	const text = "let x: int = \"hello\"\n"
 	src := source.New(1, "json.flux", text)
@@ -263,6 +314,8 @@ func TestJSONIsVersionedAndCarriesBothUnits(t *testing.T) {
 	}
 }
 
+// TestJSONOmitsWhatIsAbsent checks that unavailable locations and optional
+// details are omitted from JSON.
 func TestJSONOmitsWhatIsAbsent(t *testing.T) {
 	encoded, err := render.Renderer{}.JSON([]diagnostic.Diagnostic{
 		diagnostic.Error("X_INTERNAL", source.NoSpan, "no location"),
@@ -277,6 +330,8 @@ func TestJSONOmitsWhatIsAbsent(t *testing.T) {
 	}
 }
 
+// TestJSONFailureUsesTheSameDocumentShape verifies that runtime failures use
+// the versioned diagnostic schema and retain call traces.
 func TestJSONFailureUsesTheSameDocumentShape(t *testing.T) {
 	encoded, err := render.Renderer{}.JSONFailure(&fault.Error{
 		Code:    fault.CodeMissingKey,
@@ -314,6 +369,8 @@ func TestJSONFailureUsesTheSameDocumentShape(t *testing.T) {
 	}
 }
 
+// TestSeveralDiagnosticsRenderInOrder checks that text rendering preserves the
+// supplied diagnostic order.
 func TestSeveralDiagnosticsRenderInOrder(t *testing.T) {
 	src := source.New(1, "many.flux", "let a = 1\nlet b = 2\n")
 	got := render.Renderer{Source: src}.Diagnostics([]diagnostic.Diagnostic{

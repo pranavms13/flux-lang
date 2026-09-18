@@ -285,9 +285,9 @@ For more examples, look into [Examples](./examples). `type_errors.flux` is inten
 
 ## Diagnostics
 
-Every problem Flux reports names the file, the line and the construct it is
-about, carries a stable code, and — where it helps — points at the declaration
-it disagrees with.
+Every source-related language diagnostic names the file, the line and the
+construct it is about, carries a stable code, and — where it helps — points at
+the declaration it disagrees with.
 
 A type error shows both halves of the disagreement, because knowing which of the
 two is wrong is the actual question:
@@ -400,10 +400,10 @@ of nested conditionals plus a closure, and `large` is 300 bindings with a
 
 Two things are worth knowing before you read too much into these.
 
-**Parsing dominates.** It costs two to three orders of magnitude more than every
-other stage combined: parsing a 270-byte script takes 254 µs, checking it takes
-under 1 µs, and running it takes about the same. If a Flux program feels slow to start,
-the parser is why.
+**Parsing dominates.** For `small` and `large`, it costs roughly 52–61 times the
+other measured stages combined; for `nested`, roughly 524 times. Parsing a
+270-byte script takes 254 µs, checking it takes under 1 µs, and running it takes
+about the same. If a Flux program feels slow to start, the parser is why.
 
 **Nested conditionals parse in exponential time.** The parser uses unbounded
 lookahead, so each conditional nested inside another multiplies the work by
@@ -419,8 +419,10 @@ unaffected — the cost is specific to nesting `if ... then ... else` inside its
 Keep conditionals shallow for now; this is a grammar problem, and fixing it is
 [planned work](docs/PLAN.md).
 
-The interpreter and the VM perform within a few percent of each other, so choose
-between `flux run` and `flux compile` on distribution needs rather than speed.
+The VM takes about 24% more time than the interpreter for `small` and 37% more
+for `nested`, but about 23% less for `large`. Neither backend is consistently
+faster in this table; choose between `flux run` and `flux compile` based on
+distribution needs and measurements of your own workload.
 
 Full detail, including allocation counts and the methodology, is in
 [the development baseline](docs/BASELINE.md).

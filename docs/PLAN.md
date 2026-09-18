@@ -181,10 +181,11 @@ files, EOF, multiline spans, combining marks, and supplementary-plane characters
 Define terminal tab expansion explicitly; do not equate a byte offset with a
 terminal display column or LSP UTF-16 column.
 
-Implemented in `source/` and `diagnostic/`, both of which import nothing else in
-the module so the standalone build bundle can include them. Tab expansion is
-explicit: `source.DefaultTabWidth` is 8 and `PositionWithTabWidth` accepts
-another stop width. Display columns count one cell per non-tab rune and so do
+Implemented in `source/` and `diagnostic/`. `source/` has no internal dependencies,
+and `diagnostic/` depends only on `source/`, so the standalone build bundle can
+include both. Tab expansion is explicit: `source.DefaultTabWidth` is 8 and
+`PositionWithTabWidth` accepts another stop width. Display columns count one
+cell per non-tab rune and so do
 not account for double-width or zero-width characters; that limitation is
 documented on the field rather than hidden.
 

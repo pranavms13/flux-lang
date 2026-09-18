@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"sync"
 )
 
 // ProgramFormatVersion is the version of the serialized program format.
@@ -30,22 +31,19 @@ type Program struct {
 	Sources map[string]string
 }
 
+var gobTypesOnce sync.Once
+
 // registerGobTypes registers the concrete types that appear behind interfaces
 // in a serialized program. Constants are an []interface{}, and a nested
 // function is a *Chunk inside one, so gob has to be told the name to use.
 //
 // The names are explicit rather than derived from the Go import path, so moving
 // a package does not invalidate every executable built before the move.
-var registerGobTypes = func() func() {
-	var once bool
-	return func() {
-		if once {
-			return
-		}
-		once = true
+func registerGobTypes() {
+	gobTypesOnce.Do(func() {
 		gob.RegisterName("flux.Chunk", &Chunk{})
-	}
-}()
+	})
+}
 
 // Encode serializes a program, stamping it with the current format version.
 func Encode(chunk *Chunk, sources map[string]string) ([]byte, error) {

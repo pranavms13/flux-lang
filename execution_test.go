@@ -40,6 +40,8 @@ func TestExecutionParity(t *testing.T) {
 	}
 }
 
+// assertExecution parses and checks a program, then verifies matching
+// successful output from both execution backends.
 func assertExecution(t *testing.T, text, want string) {
 	t.Helper()
 	result := parser.ParseSource(source.New(1, "parity.flux", text))
@@ -137,7 +139,7 @@ func TestRuntimeFailures(t *testing.T) {
 		{`let f = "print" f(1)`, fault.CodeNotCallable, "(1)"},
 	} {
 		t.Run(test.source, func(t *testing.T) {
-			result := parser.ParseSource(source.New(1, "failure.flux", test.source))
+			result := parser.ParseSource(source.New(7, "failure.flux", test.source))
 			if result.Failed() {
 				t.Fatalf("parse: %v", result.Diagnostics)
 			}
@@ -156,6 +158,9 @@ func TestRuntimeFailures(t *testing.T) {
 				}
 				if got := result.Source.Text()[failure.Where.Start:failure.Where.End]; got != test.at {
 					t.Errorf("%s points at %q, want %q", backend.name, got, test.at)
+				}
+				if got := result.Source.TextOf(failure.Diagnostic().Primary); got != test.at {
+					t.Errorf("%s diagnostic points at %q, want %q in the original source", backend.name, got, test.at)
 				}
 				reported[backend.name] = failure
 			}

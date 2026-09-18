@@ -189,6 +189,8 @@ func NewTypeChecker() *TypeChecker {
 	})
 }
 
+// NewTypeCheckerWithConfig creates an isolated checker with the selected mode
+// and the built-in print signature.
 func NewTypeCheckerWithConfig(mode TypeCheckingMode) *TypeChecker {
 	env := NewTypeEnv(nil)
 
@@ -220,6 +222,8 @@ func (tc *TypeChecker) CheckProgram(prog *ast.Program) {
 	}
 }
 
+// CheckStatement checks an expression or validates a binding against its
+// annotation before storing its type.
 func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 	if stmt.Let != nil {
 		exprType := tc.CheckExpr(stmt.Let.Expr)
@@ -253,6 +257,8 @@ func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 	}
 }
 
+// CheckExpr returns an expression type and records diagnostics for invalid
+// constructs.
 func (tc *TypeChecker) CheckExpr(expr *ast.Expr) FluxType {
 	switch {
 	case expr.If != nil:
@@ -271,6 +277,8 @@ func (tc *TypeChecker) CheckExpr(expr *ast.Expr) FluxType {
 	}
 }
 
+// CheckIfExpr checks the condition and branch types, applying the configured
+// tolerance for non-boolean conditions and differing branches.
 func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	condType := tc.CheckExpr(ifExpr.Cond)
 	if !TypesEqual(condType, BoolType{}) && !isUnknown(condType) {
@@ -307,6 +315,8 @@ func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	return thenType
 }
 
+// CheckBinaryExpr checks a comparison chain while retaining spans for both
+// operands of each operation.
 func (tc *TypeChecker) CheckBinaryExpr(expr *ast.Binary) FluxType {
 	result := tc.checkAdditive(expr.Left)
 	leftSpan := tc.span(expr.Left)
@@ -319,6 +329,8 @@ func (tc *TypeChecker) CheckBinaryExpr(expr *ast.Binary) FluxType {
 	return result
 }
 
+// checkAdditive checks addition and subtraction left to right, retaining the
+// accumulated left operand span.
 func (tc *TypeChecker) checkAdditive(expr *ast.Additive) FluxType {
 	result := tc.CheckPrimaryExpr(expr.Left)
 	leftSpan := tc.span(expr.Left)
@@ -386,6 +398,8 @@ func (tc *TypeChecker) CheckBlockExpr(blockExpr *ast.BlockExpr) FluxType {
 	return lastType
 }
 
+// CheckPrimaryExpr checks a base and its postfix operations, extending the
+// callee or indexed-value span at each step.
 func (tc *TypeChecker) CheckPrimaryExpr(primary *ast.PrimaryExpr) FluxType {
 	var baseType FluxType
 
@@ -410,6 +424,8 @@ func (tc *TypeChecker) CheckPrimaryExpr(primary *ast.PrimaryExpr) FluxType {
 	return currentType
 }
 
+// CheckBaseExpr checks the term, group, block, or collection underlying a
+// primary expression.
 func (tc *TypeChecker) CheckBaseExpr(base *ast.BaseExpr) FluxType {
 	if base.Term != nil {
 		return tc.CheckTerm(base.Term)
@@ -427,6 +443,8 @@ func (tc *TypeChecker) CheckBaseExpr(base *ast.BaseExpr) FluxType {
 	return VoidType{}
 }
 
+// CheckTerm returns a literal or bound name type, reporting unknown names at
+// their use.
 func (tc *TypeChecker) CheckTerm(term *ast.Term) FluxType {
 	if term.Number != nil {
 		return IntType{}
@@ -446,6 +464,8 @@ func (tc *TypeChecker) CheckTerm(term *ast.Term) FluxType {
 	return VoidType{}
 }
 
+// CheckListExpr checks each element against the first and returns an unknown
+// element type for an empty list.
 func (tc *TypeChecker) CheckListExpr(list *ast.ListExpr) FluxType {
 	if len(list.Elems) == 0 {
 		// Empty list - we'll infer the type later or use a generic type
@@ -458,13 +478,15 @@ func (tc *TypeChecker) CheckListExpr(list *ast.ListExpr) FluxType {
 		if !TypesEqual(t, elemType) {
 			tc.reportWithRelated(always, CodeListElementType, elem,
 				tc.span(list.Elems[0]), "the first element is %s", []any{elemType.String()},
-				"list element %d has type %s, expected %s", i+1, t.String(), elemType.String())
+				"list element %d has type %s, expected %s", i+2, t.String(), elemType.String())
 		}
 	}
 
 	return ListType{ElementType: elemType}
 }
 
+// CheckDictExpr validates dictionary keys and checks later key and value types
+// against the first pair.
 func (tc *TypeChecker) CheckDictExpr(dict *ast.DictExpr) FluxType {
 	if len(dict.Pairs) == 0 {
 		// Empty dictionary
@@ -484,12 +506,12 @@ func (tc *TypeChecker) CheckDictExpr(dict *ast.DictExpr) FluxType {
 		if !TypesEqual(kt, keyType) {
 			tc.reportWithRelated(always, CodeDictKeyType, pair.Key,
 				tc.span(first.Key), "the first key is %s", []any{keyType.String()},
-				"dictionary key %d has type %s, expected %s", i+1, kt.String(), keyType.String())
+				"dictionary key %d has type %s, expected %s", i+2, kt.String(), keyType.String())
 		}
 		if !TypesEqual(vt, valueType) {
 			tc.reportWithRelated(always, CodeDictValueType, pair.Value,
 				tc.span(first.Value), "the first value is %s", []any{valueType.String()},
-				"dictionary value %d has type %s, expected %s", i+1, vt.String(), valueType.String())
+				"dictionary value %d has type %s, expected %s", i+2, vt.String(), valueType.String())
 		}
 	}
 
@@ -579,6 +601,8 @@ func (tc *TypeChecker) CheckIndexExpr(baseType FluxType, baseSpan source.Span, i
 	}
 }
 
+// CheckFuncExpr checks parameters and the body in a nested scope, validates
+// annotations, and retains parameter locations for call diagnostics.
 func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 	// Create new scope for function parameters
 	funcEnv := NewTypeEnv(tc.env)
@@ -659,6 +683,8 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 	}
 }
 
+// checkDictionaryKey rejects concrete key types other than int, string, and
+// bool, leaving unknown types for later checking.
 func (tc *TypeChecker) checkDictionaryKey(t FluxType, at ast.Positioned) {
 	switch t.(type) {
 	case IntType, StringType, BoolType, UnknownType:

@@ -136,6 +136,8 @@ func (tc *TypeChecker) GetWarnings() []string {
 	return tc.render(diagnostic.SeverityWarning)
 }
 
+// render formats reportable diagnostics of one severity for the legacy string
+// accessors.
 func (tc *TypeChecker) render(severity diagnostic.Severity) []string {
 	diagnostics := tc.diagnostics.WithSeverity(severity)
 	rendered := make([]string, 0, len(diagnostics))
@@ -145,6 +147,8 @@ func (tc *TypeChecker) render(severity diagnostic.Severity) []string {
 	return rendered
 }
 
+// renderOne appends explanatory notes and, when available, a source position
+// to a diagnostic message.
 func (tc *TypeChecker) renderOne(d diagnostic.Diagnostic) string {
 	message := d.Message
 	for _, note := range d.Notes {

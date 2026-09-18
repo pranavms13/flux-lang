@@ -28,6 +28,8 @@ type invocation struct {
 	status int
 }
 
+// TestCLI exercises built command-line binaries and standalone executables,
+// including configuration, exit statuses, and output streams.
 func TestCLI(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "flux")
 	if goruntime.GOOS == "windows" {
@@ -280,6 +282,8 @@ func TestCompilationFailureCleansUp(t *testing.T) {
 	}
 }
 
+// temporaryBuildDirectories lists remaining Flux build directories so tests
+// can detect cleanup failures.
 func temporaryBuildDirectories(t *testing.T) []string {
 	t.Helper()
 	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "flux-build-*"))
@@ -289,6 +293,8 @@ func temporaryBuildDirectories(t *testing.T) []string {
 	return matches
 }
 
+// TestRuntimeIsolationAndCompilerReuse checks that execution state does not
+// leak between runs or repeated compilations.
 func TestRuntimeIsolationAndCompilerReuse(t *testing.T) {
 	first, _ := parser.Parse(`let secret = 42`)
 	if err := runtime.Run(first, runtime.Options{Output: io.Discard}); err != nil {

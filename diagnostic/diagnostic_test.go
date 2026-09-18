@@ -10,10 +10,14 @@ import (
 	"github.com/pranavms13/flux-lang/source"
 )
 
+// spanAt creates a range in the common test source without requiring source
+// text.
 func spanAt(start, end int) source.Span {
 	return source.Span{SourceID: 1, Start: start, End: end}
 }
 
+// TestErrorAndWarningCarryCodeSeverityAndSpan checks the structured fields and
+// formatted messages returned by diagnostic constructors.
 func TestErrorAndWarningCarryCodeSeverityAndSpan(t *testing.T) {
 	span := spanAt(4, 7)
 
@@ -38,6 +42,8 @@ func TestErrorAndWarningCarryCodeSeverityAndSpan(t *testing.T) {
 	t.Error("a diagnostic built on NoSpan reports that it has a location")
 }
 
+// TestBuildersDoNotShareStateBetweenBranches verifies that adding labels and
+// notes to one diagnostic does not mutate another branch.
 func TestBuildersDoNotShareStateBetweenBranches(t *testing.T) {
 	base := diagnostic.Error("T_ARGUMENT_TYPE", spanAt(0, 1), "mismatch").
 		WithNote("shared note")
@@ -62,6 +68,8 @@ func TestBuildersDoNotShareStateBetweenBranches(t *testing.T) {
 	}
 }
 
+// TestWithSeverityPreservesCodeAndLocation checks that policy changes severity
+// without changing diagnostic identity or provenance.
 func TestWithSeverityPreservesCodeAndLocation(t *testing.T) {
 	original := diagnostic.Error("T_ARGUMENT_TYPE", spanAt(4, 7), "expected int")
 	downgraded := original.WithSeverity(diagnostic.SeverityWarning)
@@ -78,6 +86,8 @@ func TestWithSeverityPreservesCodeAndLocation(t *testing.T) {
 	}
 }
 
+// TestWithHelpReplacesRatherThanAccumulates checks that a later help message
+// replaces the earlier one.
 func TestWithHelpReplacesRatherThanAccumulates(t *testing.T) {
 	d := diagnostic.Error("B_UNDEFINED", spanAt(0, 3), "undefined variable").
 		WithHelp("declare %s first", "x").
@@ -87,6 +97,8 @@ func TestWithHelpReplacesRatherThanAccumulates(t *testing.T) {
 	}
 }
 
+// TestSeverityNames pins the display names for diagnostic severities,
+// including unknown values.
 func TestSeverityNames(t *testing.T) {
 	for _, test := range []struct {
 		severity diagnostic.Severity
@@ -103,6 +115,8 @@ func TestSeverityNames(t *testing.T) {
 	}
 }
 
+// TestCodeGroups checks stable code prefixes and rejects codes outside the
+// supported groups.
 func TestCodeGroups(t *testing.T) {
 	for _, test := range []struct {
 		code  diagnostic.Code
@@ -125,6 +139,8 @@ func TestCodeGroups(t *testing.T) {
 	}
 }
 
+// TestRegisterRejectsUnknownGroupsAndDuplicates checks registry validation and
+// sorted enumeration.
 func TestRegisterRejectsUnknownGroupsAndDuplicates(t *testing.T) {
 	code := diagnostic.Register("T_TEST_ONLY_CODE", "a code declared by this test")
 	description, ok := diagnostic.Describe(code)
@@ -156,6 +172,8 @@ func TestRegisterRejectsUnknownGroupsAndDuplicates(t *testing.T) {
 	}
 }
 
+// sortedAscending checks that registered codes are in strictly increasing
+// order.
 func sortedAscending(codes []diagnostic.Code) bool {
 	for i := 1; i < len(codes); i++ {
 		if codes[i-1] >= codes[i] {
@@ -165,6 +183,8 @@ func sortedAscending(codes []diagnostic.Code) bool {
 	return true
 }
 
+// assertPanics verifies that a catalogue programming error is rejected with a
+// panic.
 func assertPanics(t *testing.T, what string, call func()) {
 	t.Helper()
 	defer func() {
@@ -175,6 +195,8 @@ func assertPanics(t *testing.T, what string, call func()) {
 	call()
 }
 
+// TestInternalDiagnosticIsDistinguishableFromLanguageErrors checks the
+// internal code group and note identifying a Flux defect.
 func TestInternalDiagnosticIsDistinguishableFromLanguageErrors(t *testing.T) {
 	d := diagnostic.Internal(source.NoSpan, "unreachable opcode %d", 99)
 
@@ -190,6 +212,8 @@ func TestInternalDiagnosticIsDistinguishableFromLanguageErrors(t *testing.T) {
 	}
 }
 
+// TestToolErrorIsSeparateFromLanguageErrors checks source-less formatting and
+// standard Go error wrapping.
 func TestToolErrorIsSeparateFromLanguageErrors(t *testing.T) {
 	err := diagnostic.Tool("read source file", "missing.flux", fs.ErrNotExist)
 
@@ -215,6 +239,8 @@ func TestToolErrorIsSeparateFromLanguageErrors(t *testing.T) {
 	}
 }
 
+// TestBagOrdersByPositionThenCodeThenArrival verifies deterministic ordering
+// and stable ties without relying on insertion order alone.
 func TestBagOrdersByPositionThenCodeThenArrival(t *testing.T) {
 	var bag diagnostic.Bag
 	bag.Add(diagnostic.Error("T_LATER", spanAt(30, 33), "third"))
@@ -245,6 +271,8 @@ func TestBagOrdersByPositionThenCodeThenArrival(t *testing.T) {
 	assertMessages(t, shuffled.All(), want)
 }
 
+// TestBagOrdersAcrossSources checks that source identity takes precedence over
+// byte offsets when sorting diagnostics.
 func TestBagOrdersAcrossSources(t *testing.T) {
 	var bag diagnostic.Bag
 	bag.Add(diagnostic.Error("T_A", source.Span{SourceID: 2, Start: 0, End: 1}, "second file"))
@@ -252,6 +280,8 @@ func TestBagOrdersAcrossSources(t *testing.T) {
 	assertMessages(t, bag.All(), []string{"first file", "second file"})
 }
 
+// TestBagDeduplicatesIdenticalReports checks reference reuse while preserving
+// reports with different codes, severities, messages, or spans.
 func TestBagDeduplicatesIdenticalReports(t *testing.T) {
 	var bag diagnostic.Bag
 	first := bag.Add(diagnostic.Error("B_UNDEFINED", spanAt(4, 5), "undefined variable x"))
@@ -272,6 +302,8 @@ func TestBagDeduplicatesIdenticalReports(t *testing.T) {
 	}
 }
 
+// TestBagSuppressesConsequencesOfOneRootFailure checks that cascades remain
+// available to tools but are omitted from ordinary output.
 func TestBagSuppressesConsequencesOfOneRootFailure(t *testing.T) {
 	var bag diagnostic.Bag
 	root := bag.Add(diagnostic.Error("B_UNDEFINED", spanAt(8, 9), "undefined variable x"))
@@ -293,6 +325,33 @@ func TestBagSuppressesConsequencesOfOneRootFailure(t *testing.T) {
 	}
 }
 
+// TestBagPromotesIndependentReports keeps a repeated error visible once it is
+// reported independently, regardless of later caused-by reports.
+func TestBagPromotesIndependentReports(t *testing.T) {
+	var bag diagnostic.Bag
+	root := bag.Add(diagnostic.Warning("T_ROOT", spanAt(0, 1), "root warning"))
+	d := diagnostic.Error("T_INDEPENDENT", spanAt(2, 3), "independent error")
+	ref := bag.AddCausedBy(d, root)
+	if bag.HasErrors() {
+		t.Fatal("a suppressed error must not count as reportable")
+	}
+	if got := bag.AddCausedBy(d, root); got != ref {
+		t.Errorf("repeated consequence returned %d, want %d", got, ref)
+	}
+	assertMessages(t, bag.All(), []string{"root warning"})
+	if got := bag.Add(d); got != ref {
+		t.Errorf("independent report returned %d, want %d", got, ref)
+	}
+	if !bag.HasErrors() {
+		t.Error("the independently reported error is still suppressed")
+	}
+	bag.AddCausedBy(d, root)
+	assertMessages(t, bag.All(), []string{"root warning", "independent error"})
+	assertMessages(t, bag.AllIncludingSuppressed(), []string{"root warning", "independent error"})
+}
+
+// TestBagSeverityQueries checks error and warning predicates for empty,
+// populated, and suppressed entries.
 func TestBagSeverityQueries(t *testing.T) {
 	var bag diagnostic.Bag
 	if !bag.Empty() || bag.HasErrors() || bag.HasWarnings() {
@@ -320,6 +379,8 @@ func TestBagSeverityQueries(t *testing.T) {
 	}
 }
 
+// TestBagSuppressedErrorAloneDoesNotFailACommand verifies that only reportable
+// errors affect failure detection.
 func TestBagSuppressedErrorAloneDoesNotFailACommand(t *testing.T) {
 	var bag diagnostic.Bag
 	root := bag.Add(diagnostic.Warning("T_MODE", spanAt(0, 4), "downgraded"))
@@ -330,6 +391,8 @@ func TestBagSuppressedErrorAloneDoesNotFailACommand(t *testing.T) {
 	}
 }
 
+// TestBagExtend checks bulk insertion through the same ordering and
+// deduplication rules as individual reports.
 func TestBagExtend(t *testing.T) {
 	var bag diagnostic.Bag
 	bag.Extend([]diagnostic.Diagnostic{
@@ -340,6 +403,8 @@ func TestBagExtend(t *testing.T) {
 	assertMessages(t, bag.All(), []string{"first", "second"})
 }
 
+// assertMessages compares an ordered diagnostic list with its expected message
+// sequence.
 func assertMessages(t *testing.T, got []diagnostic.Diagnostic, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -352,6 +417,7 @@ func assertMessages(t *testing.T, got []diagnostic.Diagnostic, want []string) {
 	}
 }
 
+// messages formats diagnostic messages for readable assertion failures.
 func messages(diagnostics []diagnostic.Diagnostic) string {
 	collected := make([]string, len(diagnostics))
 	for i, d := range diagnostics {

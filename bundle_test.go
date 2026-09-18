@@ -53,6 +53,8 @@ func TestBuildBundleIsClosed(t *testing.T) {
 	}
 }
 
+// assertImportable rejects imports outside the standard library and the
+// declared standalone bundle.
 func assertImportable(t *testing.T, file, imported string, bundled map[string]bool) {
 	t.Helper()
 	switch {

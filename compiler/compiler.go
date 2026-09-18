@@ -27,6 +27,8 @@ func NewFluxCompilerForSource(src *source.Source) *FluxCompiler {
 	return &FluxCompiler{src: src}
 }
 
+// Compile resets the output chunk and compiles a parsed program, printing non-
+// void top-level expressions.
 func (c *FluxCompiler) Compile(prog *ast.Program) *vm.Chunk {
 	c.chunk = &vm.Chunk{}
 	for _, stmt := range prog.Statements {
@@ -83,6 +85,8 @@ func (c *FluxCompiler) compileExpr(expr *ast.Expr) {
 	}
 }
 
+// compileAdditive emits a left-associative chain of additions and
+// subtractions.
 func (c *FluxCompiler) compileAdditive(expr *ast.Additive) {
 	c.compilePrimary(expr.Left)
 	for _, rest := range expr.Rest {
@@ -91,6 +95,8 @@ func (c *FluxCompiler) compileAdditive(expr *ast.Additive) {
 	}
 }
 
+// compileOperator emits a located binary operation and panics if the AST
+// contains an unsupported operator.
 func (c *FluxCompiler) compileOperator(at ast.Positioned, op string) {
 	switch op {
 	case "+":
@@ -108,6 +114,8 @@ func (c *FluxCompiler) compileOperator(at ast.Positioned, op string) {
 	}
 }
 
+// compileBlock leaves only the final expression on the stack, or nil for an
+// empty block.
 func (c *FluxCompiler) compileBlock(block *ast.BlockExpr) {
 	if len(block.Exprs) == 0 {
 		c.emitAt(block, vm.OpConstant, c.addConstant(nil))
@@ -121,6 +129,8 @@ func (c *FluxCompiler) compileBlock(block *ast.BlockExpr) {
 	}
 }
 
+// compilePrimary emits a base value followed by its calls and index operations
+// in source order.
 func (c *FluxCompiler) compilePrimary(expr *ast.PrimaryExpr) {
 	base := expr.Base
 	switch {

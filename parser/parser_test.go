@@ -11,11 +11,15 @@ import (
 	"github.com/pranavms13/flux-lang/source"
 )
 
+// parse creates a named source snapshot and returns the complete parser result
+// for assertions.
 func parse(t *testing.T, name, text string) parser.Result {
 	t.Helper()
 	return parser.ParseSource(source.New(1, name, text))
 }
 
+// mustParse requires a successful parse and retains the source snapshot for
+// span checks.
 func mustParse(t *testing.T, name, text string) parser.Result {
 	t.Helper()
 	result := parse(t, name, text)
@@ -35,6 +39,8 @@ func spanText(t *testing.T, result parser.Result, node ast.Positioned) string {
 	return result.Source.TextOf(node.Span(result.Source.ID()))
 }
 
+// TestPositionsCoverEveryKindOfConstruct compares AST spans with the exact
+// source text for each grammar construct.
 func TestPositionsCoverEveryKindOfConstruct(t *testing.T) {
 	const text = `let greet = fn(name: string): string => "Hello, " + name
 let xs: [int] = [1, 2, 3]
@@ -133,6 +139,8 @@ func TestEndPositionSemantics(t *testing.T) {
 	})
 }
 
+// TestPositionsSurviveUnicodeAndCRLF checks byte spans and displayed positions
+// across multibyte characters and Windows line endings.
 func TestPositionsSurviveUnicodeAndCRLF(t *testing.T) {
 	// Identifiers are ASCII, so the non-ASCII text lives where Flux allows it:
 	// in a string literal and in a comment. Both shift byte offsets away from
@@ -175,6 +183,8 @@ func TestPositionsSurviveUnicodeAndCRLF(t *testing.T) {
 	}
 }
 
+// TestLexicalFailureReportsOneCharacter checks that invalid characters receive
+// a single-character span and syntax code.
 func TestLexicalFailureReportsOneCharacter(t *testing.T) {
 	for _, test := range []struct {
 		name, text, want string
@@ -201,6 +211,8 @@ func TestLexicalFailureReportsOneCharacter(t *testing.T) {
 	}
 }
 
+// TestSyntaxFailureLocatesTheOffendingToken verifies the token span and
+// expected-token guidance for parse failures.
 func TestSyntaxFailureLocatesTheOffendingToken(t *testing.T) {
 	const text = "let a = 1\nlet b = let\n"
 	result := parse(t, "syntax.flux", text)
@@ -221,6 +233,8 @@ func TestSyntaxFailureLocatesTheOffendingToken(t *testing.T) {
 	}
 }
 
+// TestUnexpectedEndOfInputIsItsOwnDiagnostic checks the dedicated EOF code and
+// empty end-of-file span.
 func TestUnexpectedEndOfInputIsItsOwnDiagnostic(t *testing.T) {
 	const text = "let a ="
 	result := parse(t, "eof.flux", text)
@@ -242,6 +256,8 @@ func TestUnexpectedEndOfInputIsItsOwnDiagnostic(t *testing.T) {
 	}
 }
 
+// TestFailedParseWithholdsTheTreeButKeepsItForTools prevents partial trees
+// from appearing executable while preserving them for tooling.
 func TestFailedParseWithholdsTheTreeButKeepsItForTools(t *testing.T) {
 	result := parse(t, "partial.flux", "let a = 1\nlet b = ")
 
@@ -260,6 +276,8 @@ func TestFailedParseWithholdsTheTreeButKeepsItForTools(t *testing.T) {
 	}
 }
 
+// TestSuccessfulParseHasNoPartialTree verifies that a complete parse exposes
+// only the executable tree and no errors.
 func TestSuccessfulParseHasNoPartialTree(t *testing.T) {
 	result := mustParse(t, "ok.flux", "let a = 1")
 
@@ -275,6 +293,8 @@ func TestSuccessfulParseHasNoPartialTree(t *testing.T) {
 	}
 }
 
+// TestTokenStreamKeepsCommentsAndWhitespace verifies that tokens and trailing
+// trivia reconstruct the original fixture.
 func TestTokenStreamKeepsCommentsAndWhitespace(t *testing.T) {
 	const text = "// a leading note\nlet a = 1 /* inline */ \nprint(a)\n"
 	result := mustParse(t, "tokens.flux", text)
@@ -334,6 +354,8 @@ func TestOnlyTheRootCapturesTokens(t *testing.T) {
 	}
 }
 
+// TestParseWrapperStillWorksAndLocatesFailures checks the text-only
+// compatibility API and its synthetic source location.
 func TestParseWrapperStillWorksAndLocatesFailures(t *testing.T) {
 	program, err := parser.Parse("let a = 1 print(a)")
 	if err != nil {
@@ -352,6 +374,8 @@ func TestParseWrapperStillWorksAndLocatesFailures(t *testing.T) {
 	}
 }
 
+// TestEmptyAndWhitespaceOnlySourcesParse checks that trivia-only files yield
+// empty programs and preserve their text.
 func TestEmptyAndWhitespaceOnlySourcesParse(t *testing.T) {
 	for _, text := range []string{"", "\n\n", "  \t\n", "// just a comment\n"} {
 		result := parse(t, "empty.flux", text)
@@ -368,6 +392,8 @@ func TestEmptyAndWhitespaceOnlySourcesParse(t *testing.T) {
 	}
 }
 
+// TestDiagnosticCodesAreRegistered checks that parser codes have descriptions
+// and belong to the syntax group.
 func TestDiagnosticCodesAreRegistered(t *testing.T) {
 	for _, code := range []diagnostic.Code{
 		parser.CodeInvalidCharacter, parser.CodeUnexpectedToken, parser.CodeUnexpectedEOF,
@@ -392,6 +418,8 @@ func primary(t *testing.T, expr *ast.Expr) *ast.PrimaryExpr {
 	return expr.Bin.Left.Left
 }
 
+// onlyDiagnostic requires exactly one parse failure and returns it for
+// location and message assertions.
 func onlyDiagnostic(t *testing.T, result parser.Result) diagnostic.Diagnostic {
 	t.Helper()
 	if !result.Failed() {

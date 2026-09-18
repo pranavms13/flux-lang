@@ -80,7 +80,7 @@ func (r Renderer) Failure(failure *fault.Error) string {
 	var out strings.Builder
 	severity := diagnostic.SeverityError
 	out.WriteString(r.headline(failure.Where.String(), severity, failure.Code, failure.Message))
-	if failure.Where.IsValid() {
+	if failure.Where.IsValid() && r.Source != nil && r.Source.Name() == failure.Where.File {
 		if snippet := r.snippetAt(failure.Where.Line, failure.Where.Start, failure.Where.End); snippet != "" {
 			out.WriteString("\n")
 			out.WriteString(snippet)
@@ -102,6 +102,8 @@ func (r Renderer) ToolError(err *diagnostic.ToolError) string {
 	return r.style(severityColor(diagnostic.SeverityError), "error") + ": " + err.Error()
 }
 
+// headline formats the severity, code, and message, adding a location and
+// internal-defect label when applicable.
 func (r Renderer) headline(where string, severity diagnostic.Severity, code diagnostic.Code, message string) string {
 	label := severity.String()
 	if code == diagnostic.CodeInternal {
@@ -114,6 +116,8 @@ func (r Renderer) headline(where string, severity diagnostic.Severity, code diag
 	return where + ": " + headline
 }
 
+// locate formats a span location only when it belongs to the configured
+// source.
 func (r Renderer) locate(span source.Span) string {
 	if r.Source == nil || !span.IsValid() || span.SourceID != r.Source.ID() {
 		return ""
@@ -121,6 +125,8 @@ func (r Renderer) locate(span source.Span) string {
 	return r.Source.Locate(span).String()
 }
 
+// snippet draws a span only when the configured source has its source
+// identity.
 func (r Renderer) snippet(span source.Span) string {
 	if r.Source == nil || !span.IsValid() || span.SourceID != r.Source.ID() {
 		return ""
@@ -194,6 +200,8 @@ const (
 	colorReset   = "\x1b[0m"
 )
 
+// severityColor selects the ANSI style for an error, warning, or informational
+// diagnostic.
 func severityColor(severity diagnostic.Severity) string {
 	switch severity {
 	case diagnostic.SeverityWarning:
@@ -205,6 +213,7 @@ func severityColor(severity diagnostic.Severity) string {
 	}
 }
 
+// style wraps text in ANSI escapes only when color output is enabled.
 func (r Renderer) style(color, text string) string {
 	if !r.Color {
 		return text

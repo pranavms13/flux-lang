@@ -26,8 +26,9 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   primary span, related locations, notes, help. A `Bag` orders them
   deterministically and withholds the follow-on errors that one root failure
   causes. `ToolError` is the separate, source-less kind for a missing file or a
-  missing Go toolchain. Neither package imports anything else in the module, so
-  the standalone build bundle can include them beside the VM.
+  missing Go toolchain. `source/` has no internal dependencies, and `diagnostic/`
+  depends only on `source/`, so the standalone build bundle can include them
+  beside the VM.
 - `ast/` defines the parser grammar. Addition/subtraction bind more tightly than
   comparisons; operators within each level associate left to right. Every node
   embeds `ast.Node`, which Participle fills with the node's start and end
@@ -163,25 +164,27 @@ or extend the embedding/build step if the VM is split into multiple files.
 - Inference is intentionally incomplete. Untyped parameters use `UnknownType`;
   it is not a constraint solver. Strict mode is strongest with explicit function
   signatures. Recursive/forward function references are not resolved by the checker.
-- Compiler `optimizationLevel` and `debug` settings are reserved metadata and do
-  not currently change generated code.
-- Runtime diagnostics are readable CLI errors, but most lack source spans. The
-  internal interpreter/VM APIs still signal runtime failures with panics.
+- Compiler `optimizationLevel` is reserved metadata and does not currently change
+  generated code. `compiler.debug` embeds source text for runtime snippets;
+  without it, generated executables report locations and call traces only.
+- Source display columns count one cell per non-tab rune, so carets may be
+  misaligned for double-width characters and combining marks.
 - Bytecode is an internal format without a compatibility promise; rebuild programs
   after compiler changes. Previously built standalone executables are unaffected.
 
 ## Next development priorities
 
-1. Add source positions and structured diagnostics throughout the AST and runtime.
-2. Define stronger inference and recursive function checking, including the exact
-   meaning of strict mode for unannotated functions.
-3. Choose and specify the next language features, then implement them in both
-   backends with shared behavioral tests.
+1. Complete Phase 2 of [the development plan](PLAN.md): an executable language
+   specification and recorded semantic decisions.
+2. Implement Phase 3's core expressions, local bindings, lexical closures, and
+   typed recursion in both backends with shared behavioral tests.
+3. Add Phase 4's constraint inference, type schemes, and precise checking-mode
+   rules, including strict mode for unannotated functions.
 4. Exercise release automation in GitHub. The workflow now accepts explicitly
    created release versions, grants release write permissions, fetches history for
    changelogs, and lets the release action create the tag. Remote publishing still
    needs validation; no release was created during this local review.
-5. Add editor diagnostics/completion only after stable source-aware diagnostics exist.
+5. Build editor diagnostics/completion on the source-aware diagnostic model.
 
 ## Verified in this review
 

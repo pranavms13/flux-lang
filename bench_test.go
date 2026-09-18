@@ -46,6 +46,8 @@ var benchOrder = []string{"small", "nested", "large"}
 // b.Loop nor testing.B.KeepAlive.
 var compiledChunk *vm.Chunk
 
+// smallProgram supplies the representative script used for the small pipeline
+// benchmarks.
 func smallProgram() string {
 	return `let add = fn(a: int, b: int): int => a + b
 let greet = fn(name: string): string => "Hello, " + name
@@ -112,6 +114,8 @@ func BenchmarkParseNesting(b *testing.B) {
 	}
 }
 
+// BenchmarkParse measures parsing from source text for each benchmark program
+// shape.
 func BenchmarkParse(b *testing.B) {
 	forEachProgram(b, func(b *testing.B, source string) {
 		b.SetBytes(int64(len(source)))
@@ -123,6 +127,8 @@ func BenchmarkParse(b *testing.B) {
 	})
 }
 
+// BenchmarkTypeCheck measures fresh checkers against a pre-parsed AST,
+// excluding parsing time.
 func BenchmarkTypeCheck(b *testing.B) {
 	forEachProgram(b, func(b *testing.B, source string) {
 		prog := mustParse(b, source)
@@ -136,6 +142,8 @@ func BenchmarkTypeCheck(b *testing.B) {
 	})
 }
 
+// BenchmarkCompile measures bytecode generation from pre-parsed benchmark
+// programs.
 func BenchmarkCompile(b *testing.B) {
 	forEachProgram(b, func(b *testing.B, source string) {
 		prog := mustParse(b, source)
@@ -145,6 +153,8 @@ func BenchmarkCompile(b *testing.B) {
 	})
 }
 
+// BenchmarkInterpret measures fresh interpreter runs with program output
+// discarded.
 func BenchmarkInterpret(b *testing.B) {
 	forEachProgram(b, func(b *testing.B, source string) {
 		prog := mustParse(b, source)
@@ -157,6 +167,8 @@ func BenchmarkInterpret(b *testing.B) {
 	})
 }
 
+// BenchmarkVM measures fresh VM runs from precompiled bytecode with output
+// discarded.
 func BenchmarkVM(b *testing.B) {
 	forEachProgram(b, func(b *testing.B, source string) {
 		chunk := compiler.NewFluxCompiler().Compile(mustParse(b, source))
@@ -168,6 +180,7 @@ func BenchmarkVM(b *testing.B) {
 	})
 }
 
+// forEachProgram runs a benchmark subtest for each named source program.
 func forEachProgram(b *testing.B, run func(b *testing.B, source string)) {
 	b.Helper()
 	for _, name := range benchOrder {
@@ -175,6 +188,8 @@ func forEachProgram(b *testing.B, run func(b *testing.B, source string)) {
 	}
 }
 
+// mustParse prepares a benchmark AST and fails immediately if the fixture
+// cannot be parsed.
 func mustParse(b *testing.B, source string) *ast.Program {
 	b.Helper()
 	prog, err := parser.Parse(source)

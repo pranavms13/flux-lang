@@ -190,21 +190,118 @@ print("x")
 	}
 }
 
-func TestCodesCollectsBothSidesOfAPlannedFixture(t *testing.T) {
+func TestCodesCollectsOnlyAssertedDiagnostics(t *testing.T) {
 	planned, err := Parse("f.flux", `//! rule: R
 //! about: a
 //! status: planned
 //! milestone: phase-3
 //! specified: static-error T_FUTURE at 1:1..1:2
 //! all: runtime-error R_TODAY at 1:1..1:2
+//! lenient-warning: T_WARNING at 1:1..1:2
 x
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
 	codes := Codes([]Fixture{planned})
-	if len(codes) != 2 || codes[0] != "R_TODAY" || codes[1] != "T_FUTURE" {
-		t.Errorf("codes = %v, want both the present and the specified one", codes)
+	if len(codes) != 2 || codes[0] != "R_TODAY" || codes[1] != "T_WARNING" {
+		t.Errorf("codes = %v, want the current error and warning, without the future code", codes)
+	}
+}
+
+func TestPlannedOutcomesVaryByMode(t *testing.T) {
+	text := `//! rule: TYP-INFERENCE-CONSTRAINTS
+//! about: inference rejects a bad call only when checking can stop execution
+//! status: planned
+//! milestone: phase-4
+//! specified: runtime-error R_OPERAND_TYPE at 1:1..1:2
+//! specified-strict: static-error T_ARGUMENT_TYPE at 2:1..2:2
+//! specified-lenient: static-error T_ARGUMENT_TYPE at 2:1..2:2
+//! all: runtime-error R_OPERAND_TYPE at 1:1..1:2
+`
+	f, err := Parse("f.flux", text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Specified[fixtures.ModeDisabled].Kind != KindRuntimeError ||
+		f.Specified[fixtures.ModeWarnOnly].Kind != KindRuntimeError ||
+		f.Specified[fixtures.ModeStrict].Kind != KindStaticError {
+		t.Fatalf("specified overrides lost mode differences: %v", f.Specified)
+	}
+	f.Outcomes[fixtures.ModeStrict] = f.Specified[fixtures.ModeStrict]
+	if f.SatisfiesSpecification() {
+		t.Fatal("lenient checking still lacks inference")
+	}
+	f.Outcomes[fixtures.ModeLenient] = f.Specified[fixtures.ModeLenient]
+	if !f.SatisfiesSpecification() {
+		t.Fatal("a completed rule with different per-mode outcomes was not recognized")
+	}
+	if err := f.Validate(); err == nil || !strings.Contains(err.Error(), "mark the rule implemented") {
+		t.Fatalf("completed rule was not rejected as planned: %v", err)
+	}
+
+	// Every future mode still needs an expectation when the shorthand is omitted.
+	missing := strings.Replace(text, "//! specified: runtime-error R_OPERAND_TYPE at 1:1..1:2\n", "", 1)
+	if _, err := Parse("f.flux", missing); err == nil || !strings.Contains(err.Error(), "specified-warn-only") {
+		t.Fatalf("missing future mode was not rejected: %v", err)
+	}
+	unknown := strings.Replace(text, "specified-strict:", "specified-loose:", 1)
+	if _, err := Parse("f.flux", unknown); err == nil || !strings.Contains(err.Error(), "unknown mode") {
+		t.Fatalf("unknown future mode was not rejected: %v", err)
+	}
+}
+
+func TestPartialOutputAndStaticRejection(t *testing.T) {
+	text := `//! rule: VAL-VOID
+//! about: print takes effect before a runtime failure, but not before static rejection
+//! status: implemented
+//! all: static-error T_OPERAND_TYPE at 1:1..1:2
+//! warn-only: runtime-error R_OPERAND_TYPE at 1:1..1:2
+//! disabled: runtime-error R_OPERAND_TYPE at 1:1..1:2
+//! stdout: "before\n"
+`
+	f, err := Parse("f.flux", text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range fixtures.Modes {
+		want := "before\n"
+		if mode == fixtures.ModeStrict || mode == fixtures.ModeLenient {
+			want = ""
+		}
+		if got := f.ExpectedStdout(mode); got != want {
+			t.Errorf("%s stdout = %q, want %q", mode, got, want)
+		}
+	}
+	withoutOutput := strings.Replace(text, "//! stdout: \"before\\n\"\n", "", 1)
+	f, err = Parse("f.flux", withoutOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.ExpectedStdout(fixtures.ModeDisabled); got != "" {
+		t.Errorf("omitted error output = %q, want empty", got)
+	}
+}
+
+func TestPlannedRuntimeFailuresComparePartialOutput(t *testing.T) {
+	f, err := Parse("f.flux", `//! rule: R
+//! about: the rule changes the output before a failure
+//! status: planned
+//! milestone: phase-3
+//! specified: runtime-error R_X at 1:1..1:2
+//! specified-stdout: "new\n"
+//! all: runtime-error R_X at 1:1..1:2
+//! stdout: "old\n"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.SatisfiesSpecification() {
+		t.Fatal("matching failures with different partial output counted as implemented")
+	}
+	f.Stdout = "new\n"
+	if !f.SatisfiesSpecification() {
+		t.Fatal("matching failures and partial output did not count as implemented")
 	}
 }
 

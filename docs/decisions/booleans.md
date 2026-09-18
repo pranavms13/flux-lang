@@ -24,6 +24,8 @@ not evaluate their right operand when the left one decides the answer.
 
 Separately, require a condition to be a `bool` in every mode. Truthiness is
 removed rather than downgraded, so there is one rule instead of a rule per mode.
+The checker reports `T_CONDITION_TYPE`; when checking is relaxed or disabled,
+runtime validation reports `R_CONDITION_TYPE` at the condition.
 
 ```flux
 if count > 0 && ready then "go" else "wait"

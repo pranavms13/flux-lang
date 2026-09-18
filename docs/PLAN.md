@@ -444,11 +444,11 @@ comments declare what it requires, so the file the parser reads is the file a
 reader reads.
 
 - [x] Add `testdata/conformance/` fixtures with source, required phase, configuration,
-      expected output/value, error code, and source span. 100 fixtures across eight
+      expected output/value, error code, and source span. 101 fixtures across eight
       sections; a span is required for every declared failure.
 - [x] Run each current-language fixture against interpreter and VM. Run representative
       fixtures through the real standalone compiler as well.
-      `TestConformanceStandaloneExecutables` builds seven of them into real executables
+      `TestConformanceStandaloneExecutables` builds nine of them into real executables
       and checks the position each reports after the source is no longer consulted.
 - [x] Store future examples separately with explicit milestone metadata; do not silently
       skip arbitrary failing tests or mark unsupported syntax as implemented. A planned

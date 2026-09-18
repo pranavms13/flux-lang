@@ -131,6 +131,20 @@ is expected to do in each type-checking mode; `fixtures_test.go` runs each one i
 all four modes on both backends and fails on any example the manifest does not
 declare. A fixture's kind is derived from its outcomes, never from its filename.
 
+`internal/conformance` reads the leading `//!` directives in
+`testdata/conformance/`. `all:` sets the current outcome for every checking mode;
+later `strict:`, `lenient:`, `warn-only:` or `disabled:` directives override one
+mode. A planned fixture uses `specified:` for the future default and
+`specified-<mode>:` for exceptions. For example, a type error can be a static
+failure in strict/lenient modes and a runtime failure in warn-only/disabled
+modes. Every current and future mode must have an outcome.
+
+`stdout:` and `specified-stdout:` declare output from modes that execute,
+including anything printed before a runtime failure. Static rejection always
+expects empty output. Successful outcomes require an explicit output declaration;
+error outcomes default to empty output when it is omitted. Diagnostic coverage
+counts only current outcomes and declared warnings, never future requirements.
+
 `render/render_test.go` covers caret alignment against expanded tabs, stable
 no-colour output, multi-line spans, call traces, and the JSON shape.
 `docs_test.go` regenerates [DIAGNOSTICS.md](DIAGNOSTICS.md) from the code

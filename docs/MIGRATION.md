@@ -150,7 +150,8 @@ today is unaffected.
 From [D-13](decisions/equality.md) — rule `VAL-EQUALITY-FUNCTION`, phase 3.
 
 Comparing two functions, or two containers holding functions, is rejected as
-`T_INCOMPARABLE` instead of producing an answer derived from host structure.
+`T_INCOMPARABLE` by the checker, or `R_INCOMPARABLE` at run time when checking
+is relaxed or disabled, instead of producing an answer derived from host structure.
 
 ```flux
 // before

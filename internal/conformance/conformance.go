@@ -122,11 +122,11 @@ type Fixture struct {
 	// Milestone names the phase that implements a planned rule, such as
 	// "phase-3". It is empty for an implemented rule.
 	Milestone string
-	// Specified is the outcome the rule requires. It is set only for a planned
-	// rule, where it differs from every entry in Outcomes.
-	Specified Outcome
-	// SpecifiedStdout is the output the rule requires, for a planned rule
-	// whose Specified outcome completes.
+	// Specified holds the outcome the planned rule requires in each mode.
+	// The "specified" directive sets all modes; "specified-<mode>" overrides one.
+	Specified map[fixtures.Mode]Outcome
+	// SpecifiedStdout is the output the planned rule requires in modes that run,
+	// including output before a runtime failure. Static errors produce no output.
 	SpecifiedStdout string
 	// Outcomes is the present-day result in every mode of [fixtures.Modes].
 	Outcomes map[fixtures.Mode]Outcome
@@ -135,10 +135,9 @@ type Fixture struct {
 	// MOD-SEVERITY-ONLY checkable: a rule that is an error in strict mode and a
 	// warning elsewhere must keep the same code and the same span.
 	Warnings map[fixtures.Mode]Warning
-	// Stdout is the output expected wherever an outcome completes. A program
-	// that completes in several modes prints the same thing in all of them,
-	// because type checking decides whether a program runs, not what it
-	// prints.
+	// Stdout is the output expected in modes that run, including output before a
+	// runtime failure. Static errors produce no output. Checking decides whether
+	// a program runs, not what it prints. For errors, omitted stdout means empty.
 	Stdout string
 	// stdoutDeclared and specifiedStdoutDeclared record that the directive was
 	// written, which is not the same as the output being non-empty: a program
@@ -162,6 +161,24 @@ func (f Fixture) Name() string {
 
 // Outcome returns the present-day result in one mode.
 func (f Fixture) Outcome(mode fixtures.Mode) Outcome { return f.Outcomes[mode] }
+
+// ExpectedStdout returns the output expected in a present-day mode. Rejection
+// before execution produces nothing, even if another mode prints before failing.
+func (f Fixture) ExpectedStdout(mode fixtures.Mode) string {
+	return stdoutFor(f.Outcomes[mode], f.Stdout)
+}
+
+// SpecifiedOutput returns the output the planned rule requires in one mode.
+func (f Fixture) SpecifiedOutput(mode fixtures.Mode) string {
+	return stdoutFor(f.Specified[mode], f.SpecifiedStdout)
+}
+
+func stdoutFor(outcome Outcome, stdout string) string {
+	if outcome.Kind == KindStaticError {
+		return ""
+	}
+	return stdout
+}
 
 // Root is the directory holding the conformance suite, relative to the
 // repository root.
@@ -207,8 +224,9 @@ func Load(dir string) ([]Fixture, error) {
 func Parse(path, text string) (Fixture, error) {
 	fixture := Fixture{
 		Path: path, Source: text,
-		Outcomes: map[fixtures.Mode]Outcome{},
-		Warnings: map[fixtures.Mode]Warning{},
+		Outcomes:  map[fixtures.Mode]Outcome{},
+		Specified: map[fixtures.Mode]Outcome{},
+		Warnings:  map[fixtures.Mode]Warning{},
 	}
 	for number, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -256,7 +274,9 @@ func (f *Fixture) apply(key, value string) error {
 		if err != nil {
 			return err
 		}
-		f.Specified = outcome
+		for _, mode := range fixtures.Modes {
+			f.Specified[mode] = outcome
+		}
 	case "specified-stdout":
 		text, err := strconv.Unquote(value)
 		if err != nil {
@@ -281,6 +301,18 @@ func (f *Fixture) apply(key, value string) error {
 			f.Outcomes[mode] = outcome
 		}
 	default:
+		if name, specified := strings.CutPrefix(key, "specified-"); specified {
+			mode := fixtures.Mode(name)
+			if !known(mode) {
+				return fmt.Errorf("unknown mode %q in directive %q", name, key)
+			}
+			outcome, err := ParseOutcome(value)
+			if err != nil {
+				return err
+			}
+			f.Specified[mode] = outcome
+			return nil
+		}
 		if name, isWarning := strings.CutSuffix(key, "-warning"); isWarning {
 			mode := fixtures.Mode(name)
 			if !known(mode) {
@@ -404,28 +436,15 @@ func (f Fixture) Validate() error {
 		return fmt.Errorf("fixture %q: must declare a status", f.Path)
 	}
 
-	completes := false
-	for _, mode := range fixtures.Modes {
-		outcome, declared := f.Outcomes[mode]
-		if !declared {
-			return fmt.Errorf("fixture %q: no outcome declared for mode %q", f.Path, mode)
-		}
-		if err := outcome.validate(f.Path, string(mode)); err != nil {
-			return err
-		}
-		if outcome.Kind == KindOutput {
-			completes = true
-		}
-	}
-	if completes != f.stdoutDeclared {
-		return fmt.Errorf("fixture %q: a mode that completes must declare stdout, and only then", f.Path)
+	if err := validateOutcomes(f.Path, "", f.Outcomes, f.stdoutDeclared); err != nil {
+		return err
 	}
 
 	if f.Status == StatusImplemented {
 		switch {
 		case f.Milestone != "":
 			return fmt.Errorf("fixture %q: an implemented rule has no milestone", f.Path)
-		case f.Specified != (Outcome{}):
+		case len(f.Specified) != 0:
 			return fmt.Errorf("fixture %q: an implemented rule's outcomes are the specification", f.Path)
 		case f.specifiedStdoutDeclared:
 			return fmt.Errorf("fixture %q: an implemented rule's stdout is the specification", f.Path)
@@ -436,11 +455,8 @@ func (f Fixture) Validate() error {
 	if f.Milestone == "" {
 		return fmt.Errorf("fixture %q: a planned rule must name the phase that implements it", f.Path)
 	}
-	if err := f.Specified.validate(f.Path, "specified"); err != nil {
+	if err := validateOutcomes(f.Path, "specified-", f.Specified, f.specifiedStdoutDeclared); err != nil {
 		return err
-	}
-	if (f.Specified.Kind == KindOutput) != f.specifiedStdoutDeclared {
-		return fmt.Errorf("fixture %q: a specified outcome that completes must declare specified-stdout, and only then", f.Path)
 	}
 	// A planned rule that already agrees with today's behavior in every mode is
 	// an implemented rule whose fixture nobody updated. Agreeing in some modes
@@ -453,16 +469,39 @@ func (f Fixture) Validate() error {
 	return nil
 }
 
+// validateOutcomes requires a complete mode matrix. Successful runs must name
+// their output; failures default to empty output and may declare a printed prefix.
+func validateOutcomes(path, prefix string, outcomes map[fixtures.Mode]Outcome, stdoutDeclared bool) error {
+	runs := false
+	for _, mode := range fixtures.Modes {
+		outcome, declared := outcomes[mode]
+		if !declared {
+			return fmt.Errorf("fixture %q: no outcome declared for mode %q", path, prefix+string(mode))
+		}
+		if err := outcome.validate(path, prefix+string(mode)); err != nil {
+			return err
+		}
+		if outcome.Kind == KindOutput && !stdoutDeclared {
+			return fmt.Errorf("fixture %q: mode %q completes and must declare %sstdout", path, prefix+string(mode), prefix)
+		}
+		runs = runs || outcome.Kind != KindStaticError
+	}
+	if stdoutDeclared && !runs {
+		return fmt.Errorf("fixture %q: %sstdout is declared but every mode rejects before execution", path, prefix)
+	}
+	return nil
+}
+
 // SatisfiesSpecification reports whether the recorded present-day behavior
 // already meets the rule in every mode, which is what "implemented" means. A
 // well-formed planned fixture returns false.
 func (f Fixture) SatisfiesSpecification() bool {
 	for _, mode := range fixtures.Modes {
-		if f.Outcomes[mode] != f.Specified {
+		if f.Outcomes[mode] != f.Specified[mode] || f.ExpectedStdout(mode) != f.SpecifiedOutput(mode) {
 			return false
 		}
 	}
-	return f.Specified.Kind.IsError() || f.Stdout == f.SpecifiedStdout
+	return true
 }
 
 // validate checks that an outcome carries exactly the fields its kind needs.
@@ -500,8 +539,8 @@ func withStatus(all []Fixture, status Status) []Fixture {
 }
 
 // Codes returns every diagnostic code the suite expects to see, in sorted
-// order. A planned fixture contributes the codes it reports today as well as
-// the one its rule requires, because both are asserted somewhere.
+// order. Only present-day outcomes and asserted warnings count: a planned
+// requirement is not evidence that any execution actually reports that code.
 func Codes(all []Fixture) []string {
 	seen := map[string]bool{}
 	for _, fixture := range all {
@@ -510,8 +549,10 @@ func Codes(all []Fixture) []string {
 				seen[outcome.Code] = true
 			}
 		}
-		if fixture.Specified.Code != "" {
-			seen[fixture.Specified.Code] = true
+		for _, warning := range fixture.Warnings {
+			if warning.Code != "" {
+				seen[warning.Code] = true
+			}
 		}
 	}
 	codes := make([]string, 0, len(seen))

@@ -164,7 +164,8 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
   written as a literal. Strings are not indexable.
 - `VAL-BOOL` (implemented) — `bool` is `true` or `false`.
 - `VAL-VOID` (implemented) — `void` is the type of an expression with no value.
-  `print` returns void. Void cannot be operated on.
+  `print` returns void. Arithmetic and ordering reject void operands. Two void
+  results may be compared with `==` and compare equal.
 
 ### 5.2 Arithmetic and comparison
 

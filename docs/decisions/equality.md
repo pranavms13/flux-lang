@@ -27,7 +27,9 @@ that a program could rely on, so there should be no answer at all.
 
 `==` compares scalars by value and containers element by element. Comparing two
 functions, or two containers that hold functions, is rejected as
-`T_INCOMPARABLE`. Values of different types are never equal.
+`T_INCOMPARABLE` by the checker. In warn-only and disabled modes, runtime
+validation rejects the same comparison as `R_INCOMPARABLE`. Values of different
+types are never equal.
 
 The comparison is implemented over Flux values rather than by reflecting over
 host values, so what is comparable is decided by this rule and not by what the

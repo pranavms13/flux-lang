@@ -101,24 +101,67 @@ func assertConformance(t *testing.T, fixture conformance.Fixture, mode fixtures.
 	if declared, ok := fixture.Warnings[mode]; ok && got.Warning != declared {
 		t.Errorf("first warning is %s, the fixture declares %s", got.Warning, declared)
 	}
+	if err := compareResult(got, want, fixture.ExpectedStdout(mode)); err != nil {
+		t.Error(err)
+	}
+}
+
+// compareResult checks output even when execution fails after printing a prefix.
+// Planned-rule promotion uses the same comparison as present-day assertions.
+func compareResult(got result, want conformance.Outcome, stdout string) error {
 	if got.Kind != want.Kind {
-		t.Fatalf("outcome is %q, the fixture declares %q\n  got:    %s\n  detail: %s",
+		return fmt.Errorf("outcome is %q, the fixture declares %q\n  got:    %s\n  detail: %s",
 			got.Kind, want.Kind, got, got.Detail)
 	}
+	if got.Stdout != stdout {
+		return fmt.Errorf("stdout = %q, the fixture declares %q", got.Stdout, stdout)
+	}
 	if !want.Kind.IsError() {
-		if got.Stdout != fixture.Stdout {
-			t.Errorf("stdout = %q, the fixture declares %q", got.Stdout, fixture.Stdout)
-		}
-		return
+		return nil
 	}
 	if got.Code != want.Code {
-		t.Errorf("code is %s, the fixture declares %s\n  got:    %s\n  detail: %s",
+		return fmt.Errorf("code is %s, the fixture declares %s\n  got:    %s\n  detail: %s",
 			got.Code, want.Code, got, got.Detail)
 	}
 	if got.Span != want.Span {
-		t.Errorf("span is %s, the fixture declares %s\n  detail: %s",
+		return fmt.Errorf("span is %s, the fixture declares %s\n  detail: %s",
 			got.Span, want.Span, got.Detail)
 	}
+	return nil
+}
+
+func TestConformanceChecksOutputBeforeFailure(t *testing.T) {
+	for _, fixture := range loadSuite(t) {
+		if fixture.Name() != "values/void.flux" {
+			continue
+		}
+		for _, backend := range engines {
+			got := runConformance(fixture, fixtures.ModeDisabled, backend)
+			if got.Stdout != "a\n" {
+				t.Fatalf("%s stdout = %q, want the prefix printed before failure", backend, got.Stdout)
+			}
+			want := fixture.Outcome(fixtures.ModeDisabled)
+			for _, incorrect := range []string{"", "wrong\n", "a\na\n"} {
+				if err := compareResult(got, want, incorrect); err == nil {
+					t.Errorf("%s accepted incorrect partial output %q", backend, incorrect)
+				}
+			}
+		}
+
+		// The real program already has different static/runtime outcomes by mode.
+		// Promotion must recognize that matrix and still check partial output.
+		fixture.Specified = fixture.Outcomes
+		fixture.SpecifiedStdout = fixture.Stdout
+		if !satisfiesPlannedFixture(fixture) {
+			t.Error("matching mode-specific outcomes were not recognized as implemented")
+		}
+		fixture.SpecifiedStdout = ""
+		if satisfiesPlannedFixture(fixture) {
+			t.Error("promotion ignored output before a runtime failure")
+		}
+		return
+	}
+	t.Fatal("missing values/void.flux fixture")
 }
 
 // TestConformanceBackendParity compares the two engines against each other
@@ -250,22 +293,25 @@ func TestPlannedRulesStillDifferFromTheSpecification(t *testing.T) {
 	}
 	for _, fixture := range planned {
 		t.Run(fixture.Name(), func(t *testing.T) {
-			satisfied := true
-			for _, mode := range fixtures.Modes {
-				got := runConformance(fixture, mode, "interpreter")
-				satisfied = satisfied &&
-					got.Kind == fixture.Specified.Kind &&
-					got.Code == fixture.Specified.Code &&
-					got.Span == fixture.Specified.Span &&
-					(fixture.Specified.Kind.IsError() || got.Stdout == fixture.SpecifiedStdout)
-			}
-			if satisfied {
-				t.Errorf("%s now satisfies %s in every mode (%s), which %s planned. "+
+			if satisfiesPlannedFixture(fixture) {
+				t.Errorf("%s now satisfies %s in every mode on both engines, which %s planned. "+
 					"Promote the rule in %s and rewrite this fixture as implemented.",
-					fixture.Path, fixture.Rule, fixture.Specified, fixture.Milestone, specPath)
+					fixture.Path, fixture.Rule, fixture.Milestone, specPath)
 			}
 		})
 	}
+}
+
+func satisfiesPlannedFixture(fixture conformance.Fixture) bool {
+	for _, mode := range fixtures.Modes {
+		for _, backend := range engines {
+			got := runConformance(fixture, mode, backend)
+			if compareResult(got, fixture.Specified[mode], fixture.SpecifiedOutput(mode)) != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // specRule is one normative rule as the specification declares it.
@@ -535,12 +581,12 @@ func TestConformanceStandaloneExecutables(t *testing.T) {
 			err := run.Run()
 
 			want := fixture.Outcome(fixtures.ModeDisabled)
+			if expected := fixture.ExpectedStdout(fixtures.ModeDisabled); stdout.String() != expected {
+				t.Errorf("stdout = %q, the fixture declares %q", stdout.String(), expected)
+			}
 			if want.Kind == conformance.KindOutput {
 				if err != nil {
 					t.Fatalf("the executable failed: %v\n%s", err, stderr.String())
-				}
-				if stdout.String() != fixture.Stdout {
-					t.Errorf("stdout = %q, the fixture declares %q", stdout.String(), fixture.Stdout)
 				}
 				return
 			}
@@ -569,6 +615,7 @@ func representative(suite []conformance.Fixture) []conformance.Fixture {
 		"VAL-LIST-INDEX":        true,
 		"VAL-DICT-MISSING":      true,
 		"VAL-FN-ARITY":          true,
+		"VAL-VOID":              true,
 		"BND-CAPTURE":           true,
 	}
 	var selected []conformance.Fixture

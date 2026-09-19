@@ -349,19 +349,26 @@ func TestCallReusesInstructionBoundaries(t *testing.T) {
 	// margin. Each `+ 0` is one more instruction in the same chunk.
 	body := strings.Repeat(" + 0", 400)
 	measure := func(depth int) float64 {
+		t.Helper()
 		source := fmt.Sprintf(
 			"let f = fn(n: int): int => if n < 1 then 0%s else f(n - 1)%s\nprint(f(%d))\n",
 			body, body, depth)
 		chunk, _ := compile(t, "boundaries.flux", source)
+		var runErr error
 		result := testing.Benchmark(func(b *testing.B) {
 			var out bytes.Buffer
 			for i := 0; i < b.N; i++ {
 				out.Reset()
 				if err := vm.NewWithOutput(chunk, &out).Run(); err != nil {
-					b.Fatalf("run: %v", err)
+					runErr = err
+					b.FailNow()
 				}
 			}
 		})
+		// Standalone benchmark failures do not fail the enclosing test.
+		if runErr != nil {
+			t.Fatalf("run at depth %d: %v", depth, runErr)
+		}
 		return float64(result.AllocedBytesPerOp())
 	}
 

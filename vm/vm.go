@@ -124,9 +124,21 @@ type VM struct {
 	scopes   []map[uint32]*value.Cell
 	depth    int
 	// MaxDepth limits active user function calls. Zero uses 256.
-	MaxDepth   int
+	MaxDepth int
+	// depthLimit is MaxDepth with its default resolved. Run reads MaxDepth
+	// rather than writing to it, so that a caller which configures a VM and
+	// then inspects it never finds a value it did not assign.
+	depthLimit int
+	// boundaries holds the instruction start offsets of the chunk being run.
 	boundaries map[int]bool
-	out        io.Writer
+	// boundaryCache memoizes those offsets per chunk across a whole call
+	// tree. The set is derived from Chunk.Code, which never changes after
+	// compilation, but Run is entered once per user function call, so
+	// rebuilding it there made every call pay for the whole chunk again. It
+	// lives on the VM rather than on the Chunk so that two VMs may still run
+	// one chunk concurrently.
+	boundaryCache map[*Chunk]map[int]bool
+	out           io.Writer
 }
 
 // New returns a VM that prints to standard output.
@@ -160,14 +172,11 @@ func (vm *VM) Run() error {
 	if vm.chunk.Failure != nil {
 		return vm.chunk.Failure
 	}
-	if vm.MaxDepth <= 0 {
-		vm.MaxDepth = value.DefaultMaxDepth
+	vm.depthLimit = vm.MaxDepth
+	if vm.depthLimit <= 0 {
+		vm.depthLimit = value.DefaultMaxDepth
 	}
-	vm.boundaries = map[int]bool{len(vm.chunk.Code): true}
-	for ip := 0; ip < len(vm.chunk.Code); {
-		vm.boundaries[ip] = true
-		ip += 1 + 4*Opcode(vm.chunk.Code[ip]).Operands()
-	}
+	vm.boundaries = vm.instructionBoundaries()
 
 	for vm.ip < len(vm.chunk.Code) {
 		// The instruction's own offset, captured before its operands are read,
@@ -182,6 +191,29 @@ func (vm *VM) Run() error {
 		}
 	}
 	return nil
+}
+
+// instructionBoundaries returns the offsets at which the current chunk's
+// instructions start, which are the only offsets a jump may target. The end of
+// the code counts as a boundary so that a jump past the last instruction can
+// terminate the loop.
+//
+// The answer is cached per chunk: a recursive function enters Run once per
+// call, and walking its whole body to rediscover a fixed property of the
+// bytecode dominated the cost of running it.
+func (vm *VM) instructionBoundaries() map[int]bool {
+	if vm.boundaryCache == nil {
+		vm.boundaryCache = map[*Chunk]map[int]bool{}
+	} else if cached, ok := vm.boundaryCache[vm.chunk]; ok {
+		return cached
+	}
+	boundaries := map[int]bool{len(vm.chunk.Code): true}
+	for ip := 0; ip < len(vm.chunk.Code); {
+		boundaries[ip] = true
+		ip += 1 + 4*Opcode(vm.chunk.Code[ip]).Operands()
+	}
+	vm.boundaryCache[vm.chunk] = boundaries
+	return boundaries
 }
 
 // step validates operand availability and executes one instruction, reporting
@@ -413,8 +445,8 @@ func (vm *VM) call(nargs, start int) error {
 			return vm.locatedFailure(
 				fault.ArgumentCount(fn.Chunk.Label(), len(fn.Chunk.Params), len(args)), start)
 		}
-		if vm.depth >= vm.MaxDepth {
-			return vm.locatedFailure(fault.CallDepth(vm.MaxDepth), start)
+		if vm.depth >= vm.depthLimit {
+			return vm.locatedFailure(fault.CallDepth(vm.depthLimit), start)
 		}
 		if len(fn.Chunk.ParamIDs) != len(args) {
 			return vm.internal(start, "function parameter metadata is invalid")
@@ -422,7 +454,8 @@ func (vm *VM) call(nargs, start int) error {
 		subVM := NewWithOutput(fn.Chunk, vm.out)
 		subVM.globals = vm.globals
 		subVM.captures = fn.Captures
-		subVM.depth, subVM.MaxDepth = vm.depth+1, vm.MaxDepth
+		subVM.depth, subVM.MaxDepth = vm.depth+1, vm.depthLimit
+		subVM.boundaryCache = vm.boundaryCache
 		for i, id := range fn.Chunk.ParamIDs {
 			if id == 0 || id > fn.Chunk.BindingCount {
 				return vm.internal(start, "parameter %d is out of bounds", id)
@@ -461,8 +494,42 @@ func copyCells(env map[uint32]*value.Cell) map[uint32]*value.Cell {
 	}
 	return result
 }
+
+// operatorName is the source spelling of a binary opcode, used to name the
+// operation in a diagnostic. It is a switch rather than a map literal because
+// it runs once per arithmetic and comparison instruction, where building a map
+// would allocate on every operation.
+//
+// An opcode outside the binary set can only come from a hand-built or damaged
+// chunk. It is named rather than rendered as the empty string so that the
+// resulting diagnostic still says which instruction it came from.
 func operatorName(op Opcode) string {
-	return map[Opcode]string{OpAdd: "+", OpSub: "-", OpMultiply: "*", OpDivide: "/", OpRemainder: "%", OpEqual: "==", OpNotEqual: "!=", OpLess: "<", OpLessEqual: "<=", OpGreater: ">", OpGreaterEqual: ">="}[op]
+	switch op {
+	case OpAdd:
+		return "+"
+	case OpSub:
+		return "-"
+	case OpMultiply:
+		return "*"
+	case OpDivide:
+		return "/"
+	case OpRemainder:
+		return "%"
+	case OpEqual:
+		return "=="
+	case OpNotEqual:
+		return "!="
+	case OpLess:
+		return "<"
+	case OpLessEqual:
+		return "<="
+	case OpGreater:
+		return ">"
+	case OpGreaterEqual:
+		return ">="
+	default:
+		return fmt.Sprintf("opcode %d", op)
+	}
 }
 
 // need verifies that an instruction has the operands it is about to consume.

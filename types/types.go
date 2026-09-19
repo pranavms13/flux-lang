@@ -197,15 +197,34 @@ func NewTypeChecker() *TypeChecker {
 // NewTypeCheckerWithConfig creates an isolated checker with the selected mode
 // and the built-in print signature.
 func NewTypeCheckerWithConfig(mode TypeCheckingMode) *TypeChecker {
+	tc := &TypeChecker{config: mode}
+	tc.reset()
+	return tc
+}
+
+// printType is the built-in signature for print, which accepts any one value.
+func printType() FunctionType {
+	return FunctionType{ParamTypes: []FluxType{UnknownType{}}, ReturnType: VoidType{}}
+}
+
+// reset returns the checker to the state a fresh one would have, keeping only
+// its mode and its source. Everything else is per program: resolver IDs
+// restart at PrintID for each program, so a bindingTypes entry held over from
+// an earlier one would answer for a binding it never described, and retained
+// diagnostics would be reported against a program that did not produce them.
+//
+// It is called at the start of every CheckProgram rather than left to the
+// caller, so that reusing a checker matches reusing a compiler or a runtime.
+func (tc *TypeChecker) reset() {
 	env := NewTypeEnv(nil)
+	env.Bind("print", printType())
 
-	// Add built-in functions with more flexible typing
-	env.Bind("print", FunctionType{
-		ParamTypes: []FluxType{UnknownType{}}, // Accept any type
-		ReturnType: VoidType{},
-	})
-
-	return &TypeChecker{env: env, config: mode, bindingTypes: map[resolver.ID]FluxType{resolver.PrintID: FunctionType{ParamTypes: []FluxType{UnknownType{}}, ReturnType: VoidType{}}}, signatures: map[*ast.FuncExpr]FunctionType{}, signatureLocations: map[*ast.FuncExpr]ast.Positioned{}}
+	tc.env = env
+	tc.diagnostics = diagnostic.Bag{}
+	tc.bindings = nil
+	tc.bindingTypes = map[resolver.ID]FluxType{resolver.PrintID: printType()}
+	tc.signatures = map[*ast.FuncExpr]FunctionType{}
+	tc.signatureLocations = map[*ast.FuncExpr]ast.Positioned{}
 }
 
 // NewTypeCheckerForSource returns a checker whose diagnostics are located in
@@ -219,6 +238,7 @@ func NewTypeCheckerForSource(src *source.Source, mode TypeCheckingMode) *TypeChe
 
 // Type checking methods
 func (tc *TypeChecker) CheckProgram(prog *ast.Program) {
+	tc.reset()
 	tc.bindings = resolver.Resolve(prog, tc.source)
 	for _, d := range tc.bindings.Diagnostics {
 		tc.diagnostics.Add(d)

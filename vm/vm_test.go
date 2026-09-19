@@ -308,3 +308,73 @@ func TestPhase3MalformedOperands(t *testing.T) {
 		}
 	}
 }
+
+// TestRunLeavesMaxDepthUnchanged pins MaxDepth as configuration the VM reads
+// rather than state it edits. Run resolves the zero default into an unexported
+// field, so a caller that inspects or re-sets the limit between runs sees the
+// value it assigned.
+func TestRunLeavesMaxDepthUnchanged(t *testing.T) {
+	chunk, _ := compile(t, "depth.flux", "let f = fn(n: int): int => if n < 1 then 0 else f(n - 1)\nprint(f(3))\n")
+
+	machine := vm.NewWithOutput(chunk, &bytes.Buffer{})
+	if err := machine.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if machine.MaxDepth != 0 {
+		t.Errorf("Run set MaxDepth to %d, want the configured 0", machine.MaxDepth)
+	}
+
+	// An explicit limit still bounds recursion, and still survives the run.
+	bounded := vm.NewWithOutput(chunk, &bytes.Buffer{})
+	bounded.MaxDepth = 2
+	err := bounded.Run()
+	if err == nil {
+		t.Fatal("recursion deeper than the limit should fail")
+	}
+	if !strings.Contains(err.Error(), "2") {
+		t.Errorf("failure %q does not report the configured limit", err)
+	}
+	if bounded.MaxDepth != 2 {
+		t.Errorf("Run changed MaxDepth to %d, want 2", bounded.MaxDepth)
+	}
+}
+
+// TestCallReusesInstructionBoundaries pins the jump-boundary table as a
+// property of the bytecode, computed once per chunk rather than once per call.
+// A recursive call entering Run must not rebuild it, so allocations per call
+// stay flat as the recursion deepens.
+func TestCallReusesInstructionBoundaries(t *testing.T) {
+	// A long function body makes the table large relative to the fixed cost of
+	// a call, so rebuilding it per call is the dominant term rather than a
+	// margin. Each `+ 0` is one more instruction in the same chunk.
+	body := strings.Repeat(" + 0", 400)
+	measure := func(depth int) float64 {
+		source := fmt.Sprintf(
+			"let f = fn(n: int): int => if n < 1 then 0%s else f(n - 1)%s\nprint(f(%d))\n",
+			body, body, depth)
+		chunk, _ := compile(t, "boundaries.flux", source)
+		result := testing.Benchmark(func(b *testing.B) {
+			var out bytes.Buffer
+			for i := 0; i < b.N; i++ {
+				out.Reset()
+				if err := vm.NewWithOutput(chunk, &out).Run(); err != nil {
+					b.Fatalf("run: %v", err)
+				}
+			}
+		})
+		return float64(result.AllocedBytesPerOp())
+	}
+
+	// Bytes rather than allocation count: a several-hundred-entry map is only
+	// a handful of bucket allocations, so a count would hide the rebuild while
+	// the memory it costs is unmistakable.
+	//
+	// Each extra call costs a sub-VM and its maps, on the order of a kilobyte.
+	// Rebuilding the boundary table would add a map over every instruction in
+	// the chunk on top of that.
+	perCall := (measure(64) - measure(4)) / 60
+	if perCall > 4096 {
+		t.Errorf("each call allocates %.0f bytes, far more than a sub-VM costs; "+
+			"the boundary table is being rebuilt per call", perCall)
+	}
+}

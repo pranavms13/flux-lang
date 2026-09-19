@@ -46,3 +46,10 @@ type Positioned interface {
 	Span(id source.SourceID) source.Span
 	HasPosition() bool
 }
+
+// Range spans an accumulated left operand and an operator application.
+// It is used for equality diagnostics, which concern both values.
+type Range struct{ Left, Right Positioned }
+
+func (r Range) HasPosition() bool                   { return r.Left.HasPosition() && r.Right.HasPosition() }
+func (r Range) Span(id source.SourceID) source.Span { return r.Left.Span(id).Union(r.Right.Span(id)) }

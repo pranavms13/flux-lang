@@ -70,6 +70,8 @@ let xs = [1, 2, 3]
 let d = {"k": 1}
 print(add(xs[0], d["k"]))
 print(if true then { 1 } else { 2 })
+let make = fn(x: int) => { let local = x; fn(): bool => false || (local > 0 && true) }
+print(make(1)())
 `
 	chunk, _ := compile(t, "boundaries.flux", text)
 
@@ -80,6 +82,9 @@ print(if true then { 1 } else { 2 })
 		for ip := 0; ip < len(c.Code); {
 			starts[ip] = true
 			ip += 1 + 4*vm.Opcode(c.Code[ip]).Operands()
+		}
+		if len(c.Locations) != len(starts) {
+			t.Errorf("%s: %d instructions but %d source locations", name, len(starts), len(c.Locations))
 		}
 		if len(c.Locations) == 0 {
 			t.Errorf("%s has no source map", name)
@@ -276,5 +281,107 @@ print(f(1))
 	}
 	if ip != len(chunk.Code) {
 		t.Errorf("walking the chunk ended at %d, want %d", ip, len(chunk.Code))
+	}
+}
+
+func TestPhase3MalformedOperands(t *testing.T) {
+	for _, op := range []vm.Opcode{vm.OpDeclareGlobal, vm.OpDeclareLocal, vm.OpDefineLocal, vm.OpGetLocal, vm.OpGetCapture} {
+		for width := 0; width < 4; width++ {
+			chunk := &vm.Chunk{Code: append([]byte{byte(op)}, make([]byte, width)...)}
+			_, err := run(t, chunk)
+			e, ok := err.(*fault.Error)
+			if !ok || e.Code != diagnostic.CodeInternal {
+				t.Fatalf("%d width %d: %v", op, width, err)
+			}
+		}
+		chunk := &vm.Chunk{Code: []byte{byte(op), 0, 0, 0, 2}, BindingCount: 1}
+		_, err := run(t, chunk)
+		e, ok := err.(*fault.Error)
+		if !ok || e.Code != diagnostic.CodeInternal {
+			t.Fatalf("%d out of bounds: %v", op, err)
+		}
+	}
+	for _, target := range []byte{1, 9} {
+		_, err := run(t, &vm.Chunk{Code: []byte{byte(vm.OpJump), 0, 0, 0, target}})
+		if e, ok := err.(*fault.Error); !ok || e.Code != diagnostic.CodeInternal {
+			t.Fatalf("jump target %d: %v", target, err)
+		}
+	}
+}
+
+// TestRunLeavesMaxDepthUnchanged pins MaxDepth as configuration the VM reads
+// rather than state it edits. Run resolves the zero default into an unexported
+// field, so a caller that inspects or re-sets the limit between runs sees the
+// value it assigned.
+func TestRunLeavesMaxDepthUnchanged(t *testing.T) {
+	chunk, _ := compile(t, "depth.flux", "let f = fn(n: int): int => if n < 1 then 0 else f(n - 1)\nprint(f(3))\n")
+
+	machine := vm.NewWithOutput(chunk, &bytes.Buffer{})
+	if err := machine.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if machine.MaxDepth != 0 {
+		t.Errorf("Run set MaxDepth to %d, want the configured 0", machine.MaxDepth)
+	}
+
+	// An explicit limit still bounds recursion, and still survives the run.
+	bounded := vm.NewWithOutput(chunk, &bytes.Buffer{})
+	bounded.MaxDepth = 2
+	err := bounded.Run()
+	if err == nil {
+		t.Fatal("recursion deeper than the limit should fail")
+	}
+	if !strings.Contains(err.Error(), "2") {
+		t.Errorf("failure %q does not report the configured limit", err)
+	}
+	if bounded.MaxDepth != 2 {
+		t.Errorf("Run changed MaxDepth to %d, want 2", bounded.MaxDepth)
+	}
+}
+
+// TestCallReusesInstructionBoundaries pins the jump-boundary table as a
+// property of the bytecode, computed once per chunk rather than once per call.
+// A recursive call entering Run must not rebuild it, so allocations per call
+// stay flat as the recursion deepens.
+func TestCallReusesInstructionBoundaries(t *testing.T) {
+	// A long function body makes the table large relative to the fixed cost of
+	// a call, so rebuilding it per call is the dominant term rather than a
+	// margin. Each `+ 0` is one more instruction in the same chunk.
+	body := strings.Repeat(" + 0", 400)
+	measure := func(depth int) float64 {
+		t.Helper()
+		source := fmt.Sprintf(
+			"let f = fn(n: int): int => if n < 1 then 0%s else f(n - 1)%s\nprint(f(%d))\n",
+			body, body, depth)
+		chunk, _ := compile(t, "boundaries.flux", source)
+		var runErr error
+		result := testing.Benchmark(func(b *testing.B) {
+			var out bytes.Buffer
+			for i := 0; i < b.N; i++ {
+				out.Reset()
+				if err := vm.NewWithOutput(chunk, &out).Run(); err != nil {
+					runErr = err
+					b.FailNow()
+				}
+			}
+		})
+		// Standalone benchmark failures do not fail the enclosing test.
+		if runErr != nil {
+			t.Fatalf("run at depth %d: %v", depth, runErr)
+		}
+		return float64(result.AllocedBytesPerOp())
+	}
+
+	// Bytes rather than allocation count: a several-hundred-entry map is only
+	// a handful of bucket allocations, so a count would hide the rebuild while
+	// the memory it costs is unmistakable.
+	//
+	// Each extra call costs a sub-VM and its maps, on the order of a kilobyte.
+	// Rebuilding the boundary table would add a map over every instruction in
+	// the chunk on top of that.
+	perCall := (measure(64) - measure(4)) / 60
+	if perCall > 4096 {
+		t.Errorf("each call allocates %.0f bytes, far more than a sub-VM costs; "+
+			"the boundary table is being rebuilt per call", perCall)
 	}
 }

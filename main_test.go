@@ -16,6 +16,7 @@ import (
 	"github.com/pranavms13/flux-lang/parser"
 	"github.com/pranavms13/flux-lang/runtime"
 	"github.com/pranavms13/flux-lang/source"
+	"github.com/pranavms13/flux-lang/types"
 	"github.com/pranavms13/flux-lang/vm"
 )
 
@@ -303,7 +304,7 @@ func TestRuntimeIsolationAndCompilerReuse(t *testing.T) {
 	second, _ := parser.Parse(`print(secret)`)
 	err := runtime.Run(second, runtime.Options{Output: io.Discard})
 	failure, ok := err.(*fault.Error)
-	if !ok || failure.Code != fault.CodeUndefinedValue {
+	if !ok || failure.Code != types.CodeUndefinedVariable {
 		t.Errorf("got %v, want an undefined-value failure; the interpreter leaked globals between programs", err)
 	}
 

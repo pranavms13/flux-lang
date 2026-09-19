@@ -7,7 +7,7 @@ There are no external services or persistent application databases.
 ## Execution paths
 
 ```text
-source -> lexer -> Participle parser -> AST -> optional type checker
+source -> lexer -> Participle parser -> AST -> resolver -> optional type checker
                                               |              |
                                           flux run       flux compile
                                               |              |
@@ -29,8 +29,9 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   missing Go toolchain. `source/` has no internal dependencies, and `diagnostic/`
   depends only on `source/`, so the standalone build bundle can include them
   beside the VM.
-- `ast/` defines the parser grammar. Addition/subtraction bind more tightly than
-  comparisons; operators within each level associate left to right. Every node
+- `ast/` defines eight explicit precedence levels, from postfix through unary,
+  multiplication, addition, relational, equality, AND and OR. Relational
+  comparisons cannot chain without parentheses. Every node
   embeds `ast.Node`, which Participle fills with the node's start and end
   positions; `Span` converts that pair into a `source.Span`, and returns
   `NoSpan` for a node built by hand rather than parsed.
@@ -42,7 +43,18 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   `ast.Program`; text after its `EndPos` is trivia and comes from the snapshot.
   Braces can represent a dictionary or an expression block; `{}` is an empty
   dictionary.
-- `types/` maintains nested type environments. `UnknownType` is compatible with
+- `resolver/` assigns stable IDs before optional checking. It records declarations,
+  identifier uses, scopes and transitive captures. Same-scope duplicates,
+  undefined names and invalid self-initialization are errors in every mode.
+  A function literal may reference its own declaration; forward references to
+  other declarations and mutual recursion remain unavailable.
+- `value/` implements checked int64 arithmetic, boolean validation, Flux equality,
+  collection indexes/keys and stable display. It contains no engine control flow
+  and is included in the standalone runtime bundle.
+- `types/` associates types with resolved binding IDs and checks annotations.
+  Complete recursive signatures are bound before checking bodies. Variable
+  function annotations also provide parameter and result types. Existing nested
+  environments remain available to individual-node checker API callers. `UnknownType` is compatible with
   other types, but must not be used as an equality test for whether a type is
   unknown. Function annotations and concrete collection members are checked.
   Diagnostics are records, not strings: `NewTypeCheckerForSource` locates them,
@@ -60,25 +72,30 @@ source -> lexer -> Participle parser -> AST -> optional type checker
   Both engines report through it, so a failure has one code and one wording
   whichever engine noticed it.
 - `runtime/` evaluates AST nodes with a fresh global environment for every run.
-  Closures capture enclosing function parameters; globals are resolved at call time.
+  Closures capture explicit cells by resolved identity. Each execution of a local
+  declaration allocates a fresh cell, so returned closures and recursive calls
+  retain the correct environment.
   `Run` returns failures rather than panicking and takes its output writer
   through `Options`, so a test reads what a program printed without replacing a
   global.
 - `compiler/` emits opcodes and four-byte unsigned operands. Each expression leaves
   exactly one value, including `nil` for void. Blocks discard intermediate results
-  and conditional jumps consume their condition. `NewFluxCompilerForSource` records
+  and restore local scopes. Conditional jumps consume and validate their bool;
+  short-circuit branches emit a replacement constant on the skipped path. `NewFluxCompilerForSource` records
   a source map on every chunk, keyed by each instruction's own start offset and
   already resolved to file, line and column, so a built executable can still
   report a position once its source is gone.
 - `vm/` executes bytecode with separate local and global environments. Calls create
-  another VM frame and preserve captured locals. `Run` returns failures; the
+  another VM frame with separate local/captured cells and shared immutable globals.
+  Operands, binding IDs and jump destinations are bounds checked. The default
+  call-depth limit is 256 in both engines; rendered traces are capped at 32 frames. `Run` returns failures; the
   instruction offset is captured before operands are read, so a failure names the
   operation that failed rather than the next one. A stack shortfall is reported as
   an internal defect, because only a compiler bug can cause one.
 - `main.go` provides the CLI. Compilation writes the packages listed in
   `bundledPackages` into a temporary module alongside the generated program, then
   invokes Go with `GOWORK=off` and `GOPROXY=off`. The program is serialized
-  through `vm.Encode` with a format version, so an executable built by an older
+  through `vm.Encode` with bytecode format version 2 (format 1 must be recompiled), so an executable built by an older
   Flux says so instead of failing to decode. Setting `compiler.debug` embeds the
   source text too, which lets the executable print the offending line at the
   cost of a larger binary containing your source. Every bundled package depends
@@ -152,33 +169,37 @@ registry and fails when the committed file drifts; run
 `FLUX_UPDATE_DOCS=1 go test -run TestDiagnosticReferenceIsCurrent .` to update it.
 
 `bench_test.go` records the parser, checker, compiler, interpreter and VM
-baseline; see [BASELINE.md](BASELINE.md) for the numbers. Parsing dominates the
+baseline; see [BASELINE.md](BASELINE.md) for historical numbers and
+[PHASE3.md](PHASE3.md) for the current measurements and validation. Parsing dominates the
 pipeline, and parsing nested conditionals costs exponential time, so keep test
 and example programs shallow.
 The existing lexer tests remain in `lexer/tests/`.
 
 When adding language syntax, update the AST, checker, interpreter, compiler/VM,
 editor grammar, documentation, and parity tests together. The compiler uses the
-VM's Go source directly for standalone builds, so keep that file self-contained
-or extend the embedding/build step if the VM is split into multiple files.
+embedded runtime source manifest for standalone builds; include every new
+runtime dependency in that manifest and keep its imports closed.
 
 ## Current semantics and limits
 
 - `print(value)` emits one line immediately and returns void. Non-void top-level
   expression statements also display their result; block expressions return their
   last value without implicitly displaying intermediate values.
-- Arithmetic supports `+` and `-`; comparisons support `==`, `<`, and `>`.
-  Parentheses control grouping. Multiplication, division, unary negation, logical
-  operators, loops, assignment, imports and explicit `return` are not implemented.
-  [SPEC.md](SPEC.md) is the full account; this section is the summary.
+- Arithmetic uses checked signed 64-bit integers: `+`, `-`, `*`, `/`, `%`, unary
+  `-`. Comparisons include `==`, `!=`, `<`, `<=`, `>`, `>=`; boolean `!`, `&&`
+  and `||` require bool, with short circuiting for the latter two.
+- Blocks contain expressions and local declarations. A final declaration yields
+  void; `{}` remains an empty dictionary. Semicolons are optional separators.
 - Lists and dictionaries are homogeneous when checking is enabled. Dictionary
-  keys are integers, strings, or booleans. Duplicate keys keep the last value.
-- Lenient mode permits truthy conditions, differing branch types and unlike-type
-  equality with warnings. It does not perform implicit string/number conversion.
-  Warn-only and disabled modes may still encounter runtime errors.
-- Inference is intentionally incomplete. Untyped parameters use `UnknownType`;
-  it is not a constraint solver. Strict mode is strongest with explicit function
-  signatures. Recursive/forward function references are not resolved by the checker.
+  keys are integers, strings, or booleans, checked at runtime too. Duplicate
+  keys keep the last value. Equality rejects functions and containers holding them.
+- Lenient mode permits differing branch types and unlike-type equality with
+  warnings. Conditions must be bool. Warn-only downgrades type errors; disabled
+  skips type checking. Both still enforce binding and runtime rules.
+- Inference is intentionally incomplete. Untyped parameters use `UnknownType`
+  unless supplied by a variable annotation; it is not a constraint solver.
+  Self-recursion requires complete signatures when checked. Constraints,
+  let-polymorphism and inferred recursion belong to Phase 4.
 - Compiler `optimizationLevel` is reserved metadata and does not currently change
   generated code. `compiler.debug` embeds source text for runtime snippets;
   without it, generated executables report locations and call traces only.
@@ -189,25 +210,17 @@ or extend the embedding/build step if the VM is split into multiple files.
 
 ## Next development priorities
 
-Phase 2 is complete: [the specification](SPEC.md), the
-[decision records](decisions/), the [migration notes](MIGRATION.md), and the
-conformance suite under `testdata/conformance/` landed together. Every rule in
-the specification has at least one fixture that runs on both engines, and the
-rules a later phase changes have fixtures that assert today's behavior and fail
-if it silently starts matching the rule.
+Phase 3 is complete. The promoted conformance fixtures, specification and
+migration notes describe its implemented behavior. [PHASE3.md](PHASE3.md)
+records the implementation baseline and verification evidence.
 
-1. Implement Phase 3 against the fixtures that already describe it. The planned
-   rules are listed in [SPEC.md](SPEC.md) with a `(phase 3)` marker, and each has
-   a decision record naming the slice that carries it.
-2. Add Phase 4's constraint inference, type schemes, and precise checking-mode
-   rules, including strict mode for unannotated functions. See
-   [D-17](decisions/inference.md) for what `UnknownType` has to be replaced with
-   and why.
-4. Exercise release automation in GitHub. The workflow now accepts explicitly
-   created release versions, grants release write permissions, fetches history for
-   changelogs, and lets the release action create the tag. Remote publishing still
-   needs validation; no release was created during this local review.
-5. Build editor diagnostics/completion on the source-aware diagnostic model.
+1. Implement Phase 4 constraint inference, type schemes, and inferred recursion.
+2. Build Phase 5's standard library, checking/formatting commands, and editor
+   diagnostics on the resolved source-aware model.
+3. Profile dictionary/block ambiguity before changing parser lookahead; nested
+   conditionals still exhibit exponential parsing cost.
+4. Validate release automation and native non-macOS execution on appropriate
+   runners. Cross-compilation is not native integration testing.
 
 ## Verified in this review
 

@@ -13,7 +13,8 @@ import (
 // Without a version, a format change turns into a confusing decode error or,
 // worse, a silently misread chunk. Adding a field that old readers can ignore
 // does not change this number; removing or repurposing one does.
-const ProgramFormatVersion = 1
+// Format 2 uses int64 constants and resolved binding/capture operands.
+const ProgramFormatVersion = 2
 
 // Program is what a compiled Flux program serializes to.
 type Program struct {

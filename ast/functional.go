@@ -10,10 +10,10 @@ type FuncParam struct {
 // Enhanced function expression with type annotations
 type FuncExpr struct {
 	Node
-	Fn         string       `parser:"'fn'"`
-	LParen     string       `parser:"'('"`
-	Params     []*FuncParam `parser:"(@@ (',' @@)*)?"`
-	RParen     string       `parser:"')'"`
+	Fn         string       `parser:"'fn':Keywords"`
+	LParen     string       `parser:"'(':Operators"`
+	Params     []*FuncParam `parser:"(@@ (',':Operators @@)*)?"`
+	RParen     string       `parser:"')':Operators"`
 	ReturnAnno *TypeAnno    `parser:"@@?"`
 	Arrow      string       `parser:"@Arrow"`
 	Body       *Expr        `parser:"@@"`

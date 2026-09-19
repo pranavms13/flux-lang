@@ -73,7 +73,7 @@ func (r Renderer) JSONFailure(failure *fault.Error) ([]byte, error) {
 		Message:  failure.Message,
 		Primary:  locationJSON(failure.Where),
 	}
-	for _, frame := range failure.Trace {
+	for _, frame := range failure.Trace[:min(len(failure.Trace), fault.MaxTraceFrames)] {
 		entry.Trace = append(entry.Trace, jsonFrame{
 			Function: frame.Function,
 			Call:     locationJSON(frame.Call),

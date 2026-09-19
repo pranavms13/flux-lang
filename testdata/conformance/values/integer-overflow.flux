@@ -1,8 +1,5 @@
 //! rule: VAL-INT-OVERFLOW
-//! about: arithmetic past the range wraps around instead of being reported
-//! status: planned
-//! milestone: phase-3
-//! specified: runtime-error R_INT_OVERFLOW at 8:27..8:30
-//! all: output
-//! stdout: "-9223372036854775808\n"
+//! about: arithmetic outside the signed 64-bit range reports overflow
+//! status: implemented
+//! all: runtime-error R_INT_OVERFLOW at 5:27..5:30
 print(9223372036854775807 + 1)

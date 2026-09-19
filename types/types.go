@@ -6,6 +6,7 @@ import (
 
 	"github.com/pranavms13/flux-lang/ast"
 	"github.com/pranavms13/flux-lang/diagnostic"
+	"github.com/pranavms13/flux-lang/resolver"
 	"github.com/pranavms13/flux-lang/source"
 )
 
@@ -164,9 +165,13 @@ func (env *TypeEnv) Lookup(name string) (FluxType, bool) {
 
 // Type checker
 type TypeChecker struct {
-	env         *TypeEnv
-	diagnostics diagnostic.Bag
-	config      TypeCheckingMode
+	env                *TypeEnv
+	diagnostics        diagnostic.Bag
+	config             TypeCheckingMode
+	bindings           *resolver.Result
+	bindingTypes       map[resolver.ID]FluxType
+	signatures         map[*ast.FuncExpr]FunctionType
+	signatureLocations map[*ast.FuncExpr]ast.Positioned
 	// source and sourceID locate the diagnostics. They are unset for a checker
 	// built without a source, in which case diagnostics carry codes and
 	// messages but no location.
@@ -192,15 +197,34 @@ func NewTypeChecker() *TypeChecker {
 // NewTypeCheckerWithConfig creates an isolated checker with the selected mode
 // and the built-in print signature.
 func NewTypeCheckerWithConfig(mode TypeCheckingMode) *TypeChecker {
+	tc := &TypeChecker{config: mode}
+	tc.reset()
+	return tc
+}
+
+// printType is the built-in signature for print, which accepts any one value.
+func printType() FunctionType {
+	return FunctionType{ParamTypes: []FluxType{UnknownType{}}, ReturnType: VoidType{}}
+}
+
+// reset returns the checker to the state a fresh one would have, keeping only
+// its mode and its source. Everything else is per program: resolver IDs
+// restart at PrintID for each program, so a bindingTypes entry held over from
+// an earlier one would answer for a binding it never described, and retained
+// diagnostics would be reported against a program that did not produce them.
+//
+// It is called at the start of every CheckProgram rather than left to the
+// caller, so that reusing a checker matches reusing a compiler or a runtime.
+func (tc *TypeChecker) reset() {
 	env := NewTypeEnv(nil)
+	env.Bind("print", printType())
 
-	// Add built-in functions with more flexible typing
-	env.Bind("print", FunctionType{
-		ParamTypes: []FluxType{UnknownType{}}, // Accept any type
-		ReturnType: VoidType{},
-	})
-
-	return &TypeChecker{env: env, config: mode}
+	tc.env = env
+	tc.diagnostics = diagnostic.Bag{}
+	tc.bindings = nil
+	tc.bindingTypes = map[resolver.ID]FluxType{resolver.PrintID: printType()}
+	tc.signatures = map[*ast.FuncExpr]FunctionType{}
+	tc.signatureLocations = map[*ast.FuncExpr]ast.Positioned{}
 }
 
 // NewTypeCheckerForSource returns a checker whose diagnostics are located in
@@ -214,6 +238,14 @@ func NewTypeCheckerForSource(src *source.Source, mode TypeCheckingMode) *TypeChe
 
 // Type checking methods
 func (tc *TypeChecker) CheckProgram(prog *ast.Program) {
+	tc.reset()
+	tc.bindings = resolver.Resolve(prog, tc.source)
+	for _, d := range tc.bindings.Diagnostics {
+		tc.diagnostics.Add(d)
+	}
+	if len(tc.bindings.Diagnostics) > 0 {
+		return
+	}
 	if !tc.config.Enabled {
 		return
 	}
@@ -226,6 +258,18 @@ func (tc *TypeChecker) CheckProgram(prog *ast.Program) {
 // annotation before storing its type.
 func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 	if stmt.Let != nil {
+		id := tc.bindings.Declarations[stmt.Let]
+		if fn := ast.FunctionLiteral(stmt.Let.Expr); fn != nil {
+			signature, complete := tc.functionSignature(stmt.Let, fn)
+			tc.bindingTypes[id] = signature
+			tc.signatures[fn] = signature
+			if stmt.Let.TypeAnno != nil {
+				tc.signatureLocations[fn] = stmt.Let.TypeAnno
+			}
+			if tc.bindings.Recursive[stmt.Let] && !complete {
+				tc.errorAt(always, CodeRecursiveSignature, stmt.Let, "recursive function %s requires every parameter and its return type to be annotated", stmt.Let.Name)
+			}
+		}
 		exprType := tc.CheckExpr(stmt.Let.Expr)
 
 		// Check if there's a type annotation
@@ -248,9 +292,11 @@ func (tc *TypeChecker) CheckStatement(stmt *ast.Statement) {
 
 			// Use the annotated type for binding
 			tc.env.Bind(stmt.Let.Name, annotatedType)
+			tc.bindingTypes[id] = annotatedType
 		} else {
 			// Use inferred type
 			tc.env.Bind(stmt.Let.Name, exprType)
+			tc.bindingTypes[id] = exprType
 		}
 	} else if stmt.Expr != nil {
 		tc.CheckExpr(stmt.Expr)
@@ -265,10 +311,6 @@ func (tc *TypeChecker) CheckExpr(expr *ast.Expr) FluxType {
 		return tc.CheckIfExpr(expr.If)
 	case expr.Bin != nil:
 		return tc.CheckBinaryExpr(expr.Bin)
-	case expr.Block != nil:
-		return tc.CheckBlockExpr(expr.Block)
-	case expr.Primary != nil:
-		return tc.CheckPrimaryExpr(expr.Primary)
 	case expr.Func != nil:
 		return tc.CheckFuncExpr(expr.Func)
 	default:
@@ -284,10 +326,7 @@ func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	if !TypesEqual(condType, BoolType{}) && !isUnknown(condType) {
 		d := diagnostic.Error(CodeConditionType, tc.span(ifExpr.Cond),
 			"if condition must be bool, got %s", condType.String())
-		if !tc.config.Strict {
-			d = d.WithNote("treating as truthy")
-		}
-		tc.report(strictOnly, d)
+		tc.report(always, d)
 	}
 
 	thenType := tc.CheckExpr(ifExpr.ThenExpr)
@@ -315,33 +354,40 @@ func (tc *TypeChecker) CheckIfExpr(ifExpr *ast.IfExpr) FluxType {
 	return thenType
 }
 
-// CheckBinaryExpr checks a comparison chain while retaining spans for both
-// operands of each operation.
-func (tc *TypeChecker) CheckBinaryExpr(expr *ast.Binary) FluxType {
-	result := tc.checkAdditive(expr.Left)
-	leftSpan := tc.span(expr.Left)
-	for _, rest := range expr.Rest {
-		right := tc.checkAdditive(rest.Right)
-		result = tc.checkOperator(rest.Operator, result, right,
-			tc.span(rest), leftSpan, tc.span(rest.Right))
-		leftSpan = leftSpan.Union(tc.span(rest))
+// checkValue traverses precedence levels while checking both logical operands,
+// including the statically skipped side of a short-circuit expression.
+func (tc *TypeChecker) checkValue(n ast.Positioned) FluxType {
+	if left, rest := ast.Chain(n); left != nil {
+		result := tc.checkValue(left)
+		leftSpan := tc.span(left)
+		for _, op := range rest {
+			right := tc.checkValue(op.Right)
+			result = tc.checkOperator(op.Operator, result, right, tc.span(op.At), leftSpan, tc.span(op.Right))
+			leftSpan = leftSpan.Union(tc.span(op.At))
+		}
+		return result
 	}
-	return result
-}
-
-// checkAdditive checks addition and subtraction left to right, retaining the
-// accumulated left operand span.
-func (tc *TypeChecker) checkAdditive(expr *ast.Additive) FluxType {
-	result := tc.CheckPrimaryExpr(expr.Left)
-	leftSpan := tc.span(expr.Left)
-	for _, rest := range expr.Rest {
-		right := tc.CheckPrimaryExpr(rest.Right)
-		result = tc.checkOperator(rest.Operator, result, right,
-			tc.span(rest), leftSpan, tc.span(rest.Right))
-		leftSpan = leftSpan.Union(tc.span(rest))
+	switch n := n.(type) {
+	case *ast.Unary:
+		if n.Primary != nil {
+			return tc.CheckPrimaryExpr(n.Primary)
+		}
+		actual := tc.checkValue(n.Operand)
+		var want FluxType = IntType{}
+		if n.Operator == "!" {
+			want = BoolType{}
+		}
+		if !TypesEqual(actual, want) {
+			tc.errorAt(always, CodeOperandType, n, "invalid operand for %s: %s", n.Operator, actual.String())
+		}
+		return want
+	case *ast.PrimaryExpr:
+		return tc.CheckPrimaryExpr(n)
 	}
-	return result
+	tc.report(always, diagnostic.Internal(tc.span(n), "invalid precedence node"))
+	return UnknownType{}
 }
+func (tc *TypeChecker) CheckBinaryExpr(n *ast.Binary) FluxType { return tc.checkValue(n) }
 
 // checkOperator reports on an operator application. opSpan covers the operator
 // and its right operand, which is where the node begins; leftSpan covers
@@ -360,14 +406,22 @@ func (tc *TypeChecker) checkOperator(operator string, left, right FluxType,
 		if TypesEqual(left, StringType{}) && TypesEqual(right, StringType{}) {
 			return StringType{}
 		}
-	case "-", "<", ">":
+	case "-", "*", "/", "%", "<", ">", "<=", ">=":
 		if TypesEqual(left, IntType{}) && TypesEqual(right, IntType{}) {
-			if operator == "-" {
+			if operator == "-" || operator == "*" || operator == "/" || operator == "%" {
 				return IntType{}
 			}
 			return BoolType{}
 		}
-	case "==":
+	case "&&", "||":
+		if TypesEqual(left, BoolType{}) && TypesEqual(right, BoolType{}) {
+			return BoolType{}
+		}
+	case "==", "!=":
+		if !comparableType(left) || !comparableType(right) {
+			tc.report(always, diagnostic.Error(CodeIncomparable, leftSpan.Union(opSpan), "function values and containers holding functions cannot be compared"))
+			return BoolType{}
+		}
 		if !TypesEqual(left, right) {
 			d := diagnostic.Error(CodeComparisonMismatch, leftSpan.Union(opSpan),
 				"cannot compare different types: %s and %s", left.String(), right.String())
@@ -392,8 +446,16 @@ func (tc *TypeChecker) checkOperator(operator string, left, right FluxType,
 
 func (tc *TypeChecker) CheckBlockExpr(blockExpr *ast.BlockExpr) FluxType {
 	var lastType FluxType = VoidType{}
-	for _, expr := range blockExpr.Exprs {
-		lastType = tc.CheckExpr(expr)
+	oldEnv := tc.env
+	tc.env = NewTypeEnv(oldEnv)
+	defer func() { tc.env = oldEnv }()
+	for _, stmt := range blockExpr.Statements {
+		if stmt.Let != nil {
+			tc.CheckStatement(stmt)
+			lastType = VoidType{}
+		} else {
+			lastType = tc.CheckExpr(stmt.Expr)
+		}
 	}
 	return lastType
 }
@@ -453,6 +515,11 @@ func (tc *TypeChecker) CheckTerm(term *ast.Term) FluxType {
 	} else if term.Bool != nil {
 		return BoolType{}
 	} else if term.Ident != nil {
+		if tc.bindings != nil {
+			if t, ok := tc.bindingTypes[tc.bindings.Uses[term]]; ok {
+				return t
+			}
+		}
 		if t, ok := tc.env.Lookup(*term.Ident); ok {
 			return t
 		}
@@ -612,18 +679,8 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 	// Process parameters with type annotations
 	paramTypes := make([]FluxType, len(funcExpr.Params))
 	params := make([]ParamInfo, len(funcExpr.Params))
-	declaredAt := map[string]*ast.FuncParam{}
+	signature, hasSignature := tc.signatures[funcExpr]
 	for i, param := range funcExpr.Params {
-		if first, repeated := declaredAt[param.Name]; repeated {
-			d := diagnostic.Error(CodeDuplicateParameter, tc.span(param),
-				"duplicate parameter: %s", param.Name)
-			if span := tc.span(first); span.IsValid() {
-				d = d.WithRelated(span, "%s is already declared here", param.Name)
-			}
-			tc.report(always, d)
-		} else {
-			declaredAt[param.Name] = param
-		}
 		var paramType FluxType
 
 		if param.TypeAnno != nil {
@@ -639,11 +696,17 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 		} else {
 			// Use unknown type for inference
 			paramType = UnknownType{}
+			if hasSignature && i < len(signature.ParamTypes) {
+				paramType = signature.ParamTypes[i]
+			}
 		}
 
 		paramTypes[i] = paramType
 		params[i] = ParamInfo{Name: param.Name, Span: tc.span(param)}
 		tc.env.Bind(param.Name, paramType)
+		if tc.bindings != nil {
+			tc.bindingTypes[tc.bindings.Parameters[param]] = paramType
+		}
 	}
 
 	// Check function body
@@ -669,8 +732,16 @@ func (tc *TypeChecker) CheckFuncExpr(funcExpr *ast.FuncExpr) FluxType {
 			returnType = annotatedReturnType
 		}
 	} else {
-		// Use inferred return type
+		// A variable function annotation also checks the body before the
+		// function is exposed, including its recursive self-reference.
 		returnType = bodyType
+		if hasSignature && !isUnknown(signature.ReturnType) {
+			returnType = signature.ReturnType
+			if !TypesEqual(bodyType, returnType) {
+				related := tc.signatureLocations[funcExpr]
+				tc.reportWithRelated(always, CodeReturnMismatch, funcExpr.Body, tc.span(related), "the function signature is declared here", nil, "return type mismatch: declared %s but body returns %s", returnType.String(), bodyType.String())
+			}
+		}
 	}
 
 	// Restore old environment
@@ -692,4 +763,51 @@ func (tc *TypeChecker) checkDictionaryKey(t FluxType, at ast.Positioned) {
 		tc.errorAt(always, CodeInvalidDictKey, at,
 			"dictionary key must be int, string, or bool, got %s", t.String())
 	}
+}
+
+func comparableType(t FluxType) bool {
+	switch t := t.(type) {
+	case FunctionType:
+		return false
+	case ListType:
+		return comparableType(t.ElementType)
+	case DictType:
+		return comparableType(t.KeyType) && comparableType(t.ValueType)
+	default:
+		return true
+	}
+}
+
+// functionSignature prebinds a complete declared signature for self-recursion.
+// Unknowns remain placeholders for nonrecursive functions until Phase 4.
+func (tc *TypeChecker) functionSignature(binding *ast.LetStatement, fn *ast.FuncExpr) (FunctionType, bool) {
+	sig := FunctionType{ReturnType: UnknownType{}}
+	if binding.TypeAnno != nil {
+		if t, err := ConvertASTType(binding.TypeAnno.Type); err == nil {
+			if f, ok := t.(FunctionType); ok {
+				return f, true
+			}
+		}
+	}
+	complete := fn.ReturnAnno != nil
+	for _, p := range fn.Params {
+		var t FluxType = UnknownType{}
+		if p.TypeAnno == nil {
+			complete = false
+		} else if v, err := ConvertASTType(p.TypeAnno.Type); err == nil {
+			t = v
+		} else {
+			complete = false
+		}
+		sig.ParamTypes = append(sig.ParamTypes, t)
+		sig.Params = append(sig.Params, ParamInfo{Name: p.Name, Span: tc.span(p)})
+	}
+	if fn.ReturnAnno != nil {
+		if t, err := ConvertASTType(fn.ReturnAnno.Type); err == nil {
+			sig.ReturnType = t
+		} else {
+			complete = false
+		}
+	}
+	return sig, complete
 }

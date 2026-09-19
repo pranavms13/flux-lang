@@ -86,8 +86,11 @@ func (r Renderer) Failure(failure *fault.Error) string {
 			out.WriteString(snippet)
 		}
 	}
-	for _, frame := range failure.Trace {
+	for _, frame := range failure.Trace[:min(len(failure.Trace), fault.MaxTraceFrames)] {
 		out.WriteString(fmt.Sprintf("\n  in %s, called at %s", frame.Function, frame.Call))
+	}
+	if len(failure.Trace) > fault.MaxTraceFrames {
+		fmt.Fprintf(&out, "\n  ... %d more calls", len(failure.Trace)-fault.MaxTraceFrames)
 	}
 	if failure.Code == diagnostic.CodeInternal {
 		out.WriteString("\n  = note: this is a bug in Flux, not in the program being run")

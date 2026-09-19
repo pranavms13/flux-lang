@@ -192,6 +192,7 @@ func allModes(outcome Outcome) map[Mode]Outcome {
 // Manifest declares every file under examples/. Adding a file there without
 // adding it here fails TestFixtureManifestCoversExamples.
 var Manifest = []Fixture{
+	{Path: "examples/core.flux", Purpose: "Phase 3 arithmetic, short circuiting, lexical captures, and global/local recursion", Outcomes: allModes(OutcomeOutput), Stdout: "120\nfalse\n16\n[7, -1, -9223372036854775808]\n1\n"},
 	{
 		Path:     "examples/main.flux",
 		Purpose:  "the introductory tour: functions, string concatenation, conditionals, booleans",

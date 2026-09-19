@@ -1,54 +1,47 @@
-// Package runtime evaluates a Flux syntax tree directly.
-//
-// It is one of two engines, the other being the bytecode VM. Both report
-// failures through the shared catalogue in fault, so a program that fails does
-// so with the same code, wording, and location whichever engine ran it.
+// Package runtime evaluates a resolved Flux syntax tree directly.
 package runtime
 
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
-	"reflect"
 
 	"github.com/pranavms13/flux-lang/ast"
 	"github.com/pranavms13/flux-lang/diagnostic"
 	"github.com/pranavms13/flux-lang/fault"
+	"github.com/pranavms13/flux-lang/resolver"
 	"github.com/pranavms13/flux-lang/source"
+	"github.com/pranavms13/flux-lang/value"
 )
 
-type Value interface{}
-
-// BuiltinFunc is a function provided by the language rather than the program.
+type Value = any
 type BuiltinFunc func(args ...Value) (Value, error)
 
-// Options configures one execution.
+func (BuiltinFunc) FluxTypeName() string { return "function" }
+
 type Options struct {
-	// Output receives everything the program prints. It defaults to standard
-	// output. Injecting it lets a test read a program's output without
-	// replacing a global, which is what forced the execution tests to run one
-	// at a time.
 	Output io.Writer
-	// Source locates failures. Without it a failure still carries its code and
-	// message, but cannot say where it happened.
 	Source *source.Source
+	// MaxDepth limits active user function calls. Zero uses 256.
+	MaxDepth int
 }
-
+type environment map[resolver.ID]*value.Cell
 type interpreter struct {
-	env  map[string]Value
-	out  io.Writer
-	src  *source.Source
-	name string // the identifier a function literal is being bound to
+	globals         environment
+	bindings        *resolver.Result
+	out             io.Writer
+	src             *source.Source
+	name            string
+	depth, maxDepth int
 }
-
 type closure struct {
 	function *ast.FuncExpr
-	locals   map[string]Value
+	captures environment
 	name     string
 }
 
-// label returns the closure name for a call trace, or the anonymous-function
-// label when it was never bound.
+func (*closure) FluxTypeName() string { return "function" }
 func (c *closure) label() string {
 	if c.name == "" {
 		return fault.Anonymous
@@ -56,375 +49,299 @@ func (c *closure) label() string {
 	return c.name
 }
 
-// Run executes a program in an environment of its own, returning the first
-// failure it hits.
-//
-// Failures are returned rather than raised, so that a mistake in the program
-// stays distinguishable from a defect in the interpreter.
 func Run(prog *ast.Program, opts Options) error {
+	bindings := resolver.Resolve(prog, opts.Source)
+	if err := bindings.Failure(opts.Source); err != nil {
+		return err
+	}
 	out := opts.Output
 	if out == nil {
 		out = os.Stdout
 	}
-	r := &interpreter{env: map[string]Value{}, out: out, src: opts.Source}
-	r.env["print"] = BuiltinFunc(func(args ...Value) (Value, error) {
+	limit := opts.MaxDepth
+	if limit <= 0 {
+		limit = value.DefaultMaxDepth
+	}
+	r := &interpreter{globals: environment{}, bindings: bindings, out: out, src: opts.Source, maxDepth: limit}
+	r.globals[resolver.PrintID] = &value.Cell{Initialized: true, Value: BuiltinFunc(func(args ...Value) (Value, error) {
 		if len(args) != 1 {
 			return nil, fault.ArgumentCount("print", 1, len(args))
 		}
-		fmt.Fprintln(r.out, args[0])
+		fmt.Fprintln(r.out, value.Display(args[0]))
 		return nil, nil
-	})
+	})}
 	for _, stmt := range prog.Statements {
-		if stmt.Let != nil {
-			r.name = stmt.Let.Name
-			value, err := r.evalExpr(stmt.Let.Expr, nil)
-			r.name = ""
-			if err != nil {
-				return err
-			}
-			r.env[stmt.Let.Name] = value
-			continue
-		}
-		value, err := r.evalExpr(stmt.Expr, nil)
+		v, err := r.statement(stmt, environment{})
 		if err != nil {
 			return err
 		}
-		if value != nil {
-			fmt.Fprintln(r.out, value)
+		if stmt.Expr != nil && v != nil {
+			fmt.Fprintln(r.out, value.Display(v))
 		}
 	}
 	return nil
 }
-
-// locate resolves a node's position, or returns the zero location when the
-// interpreter was given no source.
 func (r *interpreter) locate(at ast.Positioned) source.Location {
 	if r.src == nil || at == nil || !at.HasPosition() {
 		return source.Location{}
 	}
 	return r.src.Locate(at.Span(r.src.ID()))
 }
-
-// fail attaches the position of the construct that failed to a catalogue entry.
 func (r *interpreter) fail(err error, at ast.Positioned) error {
-	if failure, ok := err.(*fault.Error); ok {
-		return failure.At(r.locate(at))
+	if e, ok := err.(*fault.Error); ok {
+		return e.At(r.locate(at))
 	}
 	return err
 }
-
-// internal reports a defect in the interpreter. A user program must not be able
-// to reach one; the separate code keeps the CLI from presenting it as a mistake
-// in the program.
-func (r *interpreter) internal(at ast.Positioned, format string, args ...any) error {
-	return &fault.Error{
-		Code:    diagnostic.CodeInternal,
-		Message: fmt.Sprintf(format, args...),
-		Where:   r.locate(at),
-	}
+func (r *interpreter) internal(at ast.Positioned) error {
+	return &fault.Error{Code: diagnostic.CodeInternal, Message: "invalid expression or unresolved binding", Where: r.locate(at)}
 }
-
-// evalExpr evaluates an expression in the current locals and returns the first
-// located failure.
-func (r *interpreter) evalExpr(expr *ast.Expr, local map[string]Value) (Value, error) {
-	switch {
-	case expr.If != nil:
-		cond, err := r.evalExpr(expr.If.Cond, local)
-		if err != nil {
-			return nil, err
-		}
-		if truthy(cond) {
-			return r.evalExpr(expr.If.ThenExpr, local)
-		}
-		return r.evalExpr(expr.If.ElseExpr, local)
-	case expr.Bin != nil:
-		value, err := r.evalAdditive(expr.Bin.Left, local)
-		if err != nil {
-			return nil, err
-		}
-		for _, rest := range expr.Bin.Rest {
-			right, err := r.evalAdditive(rest.Right, local)
-			if err != nil {
-				return nil, err
-			}
-			if value, err = r.apply(rest, rest.Operator, value, right); err != nil {
-				return nil, err
-			}
-		}
-		return value, nil
-	case expr.Block != nil:
-		return r.evalBlock(expr.Block, local)
-	case expr.Primary != nil:
-		return r.evalPrimary(expr.Primary, local)
-	case expr.Func != nil:
-		return &closure{function: expr.Func, locals: copyLocals(local), name: r.name}, nil
-	default:
-		return nil, r.internal(expr, "expression matched no grammar alternative")
+func (r *interpreter) cell(id resolver.ID, local environment) *value.Cell {
+	if r.bindings.Bindings[id].Global {
+		return r.globals[id]
 	}
+	return local[id]
 }
-
-// evalPrimary evaluates a base value and then applies calls and indexes in
-// source order.
-func (r *interpreter) evalPrimary(primary *ast.PrimaryExpr, local map[string]Value) (Value, error) {
-	val, err := r.evalBase(primary.Base, local)
+func (r *interpreter) statement(s *ast.Statement, local environment) (Value, error) {
+	if s.Let == nil {
+		return r.eval(s.Expr, local)
+	}
+	id := r.bindings.Declarations[s.Let]
+	cell := &value.Cell{}
+	if r.bindings.Bindings[id].Global {
+		r.globals[id] = cell
+	} else {
+		local[id] = cell
+	}
+	oldName := r.name
+	r.name = s.Let.Name
+	v, err := r.eval(s.Let.Expr, local)
+	r.name = oldName
 	if err != nil {
 		return nil, err
 	}
-	for _, pf := range primary.Postfix {
-		switch {
-		case pf.Call != nil:
-			if val, err = r.evalCall(val, pf.Call, local); err != nil {
-				return nil, err
-			}
-		case pf.Index != nil:
-			index, err := r.evalExpr(pf.Index.Index, local)
-			if err != nil {
-				return nil, err
-			}
-			result, err := indexValue(val, index)
-			if err != nil {
-				return nil, r.fail(err, pf.Index)
-			}
-			val = result
-		}
-	}
-	return val, nil
+	cell.Value, cell.Initialized = v, true
+	return nil, nil
 }
-
-// evalBase evaluates a literal, group, block, or collection before any postfix
-// operations.
-func (r *interpreter) evalBase(base *ast.BaseExpr, local map[string]Value) (Value, error) {
-	switch {
-	case base == nil:
-		return nil, nil
-	case base.Term != nil:
-		return r.evalTerm(base.Term, local)
-	case base.Group != nil:
-		return r.evalExpr(base.Group.Expr, local)
-	case base.Block != nil:
-		return r.evalBlock(base.Block, local)
-	case base.List != nil:
-		values := make([]Value, 0, len(base.List.Elems))
-		for _, elem := range base.List.Elems {
-			value, err := r.evalExpr(elem, local)
-			if err != nil {
-				return nil, err
-			}
-			values = append(values, value)
-		}
-		return values, nil
-	case base.Dict != nil:
-		dict := make(map[interface{}]interface{}, len(base.Dict.Pairs))
-		for _, pair := range base.Dict.Pairs {
-			key, err := r.evalExpr(pair.Key, local)
-			if err != nil {
-				return nil, err
-			}
-			value, err := r.evalExpr(pair.Value, local)
-			if err != nil {
-				return nil, err
-			}
-			dict[key] = value
-		}
-		return dict, nil
-	}
-	return nil, r.internal(base, "base expression matched no grammar alternative")
-}
-
-// evalCall evaluates arguments, checks callability and arity, and adds the
-// call site to failures from the function body.
-func (r *interpreter) evalCall(callee Value, call *ast.CallExpr, local map[string]Value) (Value, error) {
-	args := make([]Value, 0, len(call.Args))
-	for _, argExpr := range call.Args {
-		arg, err := r.evalExpr(argExpr, local)
+func (r *interpreter) eval(n ast.Positioned, local environment) (Value, error) {
+	if left, rest := ast.Chain(n); left != nil {
+		v, err := r.eval(left, local)
 		if err != nil {
 			return nil, err
 		}
-		args = append(args, arg)
+		var at ast.Positioned = left
+		for _, op := range rest {
+			// Logical operators are control flow, not eager binary operations.
+			if op.Operator == "&&" || op.Operator == "||" {
+				b, err := value.Bool(v)
+				if err != nil {
+					return nil, r.fail(err, at)
+				}
+				if b == (op.Operator == "||") {
+					v = b
+					at = ast.Range{Left: at, Right: op.At}
+					continue
+				}
+				v, err = r.eval(op.Right, local)
+				if err != nil {
+					return nil, err
+				}
+				v, err = value.Bool(v)
+				if err != nil {
+					return nil, r.fail(err, op.Right)
+				}
+			} else {
+				rhs, err := r.eval(op.Right, local)
+				if err != nil {
+					return nil, err
+				}
+				v, err = value.Binary(op.Operator, v, rhs)
+				if err != nil {
+					var location ast.Positioned = op.At
+					if op.Operator == "==" || op.Operator == "!=" {
+						location = ast.Range{Left: at, Right: op.At}
+					}
+					return nil, r.fail(err, location)
+				}
+			}
+			at = ast.Range{Left: at, Right: op.At}
+		}
+		return v, nil
 	}
-
+	switch n := n.(type) {
+	case *ast.Expr:
+		if n.If != nil {
+			return r.eval(n.If, local)
+		}
+		if n.Func != nil {
+			return r.eval(n.Func, local)
+		}
+		return r.eval(n.Bin, local)
+	case *ast.Unary:
+		if n.MinLiteral {
+			return int64(math.MinInt64), nil
+		}
+		if n.Primary != nil {
+			return r.eval(n.Primary, local)
+		}
+		v, err := r.eval(n.Operand, local)
+		if err != nil {
+			return nil, err
+		}
+		v, err = value.Unary(n.Operator, v)
+		return v, r.fail(err, n)
+	case *ast.IfExpr:
+		v, err := r.eval(n.Cond, local)
+		if err != nil {
+			return nil, err
+		}
+		b, err := value.Bool(v)
+		if err != nil {
+			return nil, r.fail(err, n.Cond)
+		}
+		if b {
+			return r.eval(n.ThenExpr, local)
+		}
+		return r.eval(n.ElseExpr, local)
+	case *ast.FuncExpr:
+		captures := environment{}
+		for _, id := range r.bindings.Functions[n].Captures {
+			captures[id] = r.cell(id, local)
+		}
+		return &closure{function: n, captures: captures, name: r.name}, nil
+	case *ast.BlockExpr:
+		inner := copyEnvironment(local)
+		var v Value
+		for _, s := range n.Statements {
+			var err error
+			v, err = r.statement(s, inner)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return v, nil
+	case *ast.PrimaryExpr:
+		v, err := r.eval(n.Base, local)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range n.Postfix {
+			if p.Call != nil {
+				v, err = r.call(v, p.Call, local)
+			} else {
+				var index Value
+				index, err = r.eval(p.Index.Index, local)
+				if err != nil {
+					return nil, err
+				}
+				v, err = value.Index(v, index)
+				err = r.fail(err, p.Index)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		return v, nil
+	case *ast.BaseExpr:
+		switch {
+		case n.Term != nil:
+			return r.eval(n.Term, local)
+		case n.Group != nil:
+			return r.eval(n.Group.Expr, local)
+		case n.Block != nil:
+			return r.eval(n.Block, local)
+		case n.List != nil:
+			return r.eval(n.List, local)
+		case n.Dict != nil:
+			return r.eval(n.Dict, local)
+		}
+	case *ast.Term:
+		switch {
+		case n.Number != nil:
+			return n.Number.Value, nil
+		case n.String != nil:
+			return *n.String, nil
+		case n.Bool != nil:
+			return bool(*n.Bool), nil
+		case n.Ident != nil:
+			cell := r.cell(r.bindings.Uses[n], local)
+			if cell == nil || !cell.Initialized {
+				return nil, r.internal(n)
+			}
+			return cell.Value, nil
+		}
+	case *ast.ListExpr:
+		values := make([]Value, 0, len(n.Elems))
+		for _, e := range n.Elems {
+			v, err := r.eval(e, local)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, v)
+		}
+		return values, nil
+	case *ast.DictExpr:
+		dict := map[any]any{}
+		for _, p := range n.Pairs {
+			k, err := r.eval(p.Key, local)
+			if err != nil {
+				return nil, err
+			}
+			v, err := r.eval(p.Value, local)
+			if err != nil {
+				return nil, err
+			}
+			if err := value.Key(k); err != nil {
+				return nil, r.fail(err, p.Key)
+			}
+			dict[k] = v
+		}
+		return dict, nil
+	}
+	return nil, r.internal(n)
+}
+func (r *interpreter) call(callee Value, call *ast.CallExpr, local environment) (Value, error) {
+	args := make([]Value, 0, len(call.Args))
+	for _, a := range call.Args {
+		v, err := r.eval(a, local)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, v)
+	}
 	switch fn := callee.(type) {
 	case BuiltinFunc:
-		value, err := fn(args...)
-		if err != nil {
-			return nil, r.fail(err, call)
-		}
-		return value, nil
+		v, err := fn(args...)
+		return v, r.fail(err, call)
 	case *closure:
-		if len(fn.function.Params) != len(args) {
+		if len(args) != len(fn.function.Params) {
 			return nil, r.fail(fault.ArgumentCount(fn.label(), len(fn.function.Params), len(args)), call)
 		}
-		localEnv := copyLocals(fn.locals)
-		for i, param := range fn.function.Params {
-			localEnv[param.Name] = args[i]
+		if r.depth >= r.maxDepth {
+			return nil, r.fail(fault.CallDepth(r.maxDepth), call)
 		}
-		value, err := r.evalExpr(fn.function.Body, localEnv)
-		if err != nil {
-			// The failure unwinds through this call, so the frame naming the
-			// function and the call site is added here, innermost first.
-			return nil, addFrame(err, fn.label(), r.locate(call))
+		env := copyEnvironment(fn.captures)
+		for i, p := range fn.function.Params {
+			env[r.bindings.Parameters[p]] = &value.Cell{Value: args[i], Initialized: true}
 		}
-		return value, nil
+		r.depth++
+		oldName := r.name
+		r.name = ""
+		v, err := r.eval(fn.function.Body, env)
+		r.depth--
+		r.name = oldName
+		if e, ok := err.(*fault.Error); ok {
+			return nil, e.WithTrace([]fault.Frame{{Function: fn.label(), Call: r.locate(call)}})
+		}
+		return v, err
 	default:
 		return nil, r.fail(fault.NotCallable(callee), call)
 	}
 }
-
-// evalTerm evaluates a literal or resolves a name from locals before globals,
-// reporting an undefined value at its use.
-func (r *interpreter) evalTerm(term *ast.Term, local map[string]Value) (Value, error) {
-	switch {
-	case term.Bool != nil:
-		return bool(*term.Bool), nil
-	case term.Number != nil:
-		return *term.Number, nil
-	case term.String != nil:
-		return *term.String, nil
-	case term.Ident != nil:
-		if local != nil {
-			if val, ok := local[*term.Ident]; ok {
-				return val, nil
-			}
-		}
-		val, ok := r.env[*term.Ident]
-		if !ok {
-			return nil, r.fail(fault.UndefinedValue(*term.Ident), term)
-		}
-		return val, nil
+func copyEnvironment(env environment) environment {
+	copy := make(environment, len(env))
+	for id, cell := range env {
+		copy[id] = cell
 	}
-	return nil, r.internal(term, "term matched no grammar alternative")
-}
-
-// evalBlock evaluates expressions in order and returns the last value, or nil
-// when the block is absent or empty.
-func (r *interpreter) evalBlock(block *ast.BlockExpr, local map[string]Value) (Value, error) {
-	if block == nil {
-		return nil, nil
-	}
-	var result Value
-	for _, expr := range block.Exprs {
-		value, err := r.evalExpr(expr, local)
-		if err != nil {
-			return nil, err
-		}
-		result = value
-	}
-	return result, nil
-}
-
-// evalAdditive evaluates addition and subtraction left to right, locating
-// failures at the operator application.
-func (r *interpreter) evalAdditive(expr *ast.Additive, local map[string]Value) (Value, error) {
-	value, err := r.evalPrimary(expr.Left, local)
-	if err != nil {
-		return nil, err
-	}
-	for _, rest := range expr.Rest {
-		right, err := r.evalPrimary(rest.Right, local)
-		if err != nil {
-			return nil, err
-		}
-		if value, err = r.apply(rest, rest.Operator, value, right); err != nil {
-			return nil, err
-		}
-	}
-	return value, nil
-}
-
-// apply evaluates a binary operation and attaches the AST location to any
-// catalogue failure.
-func (r *interpreter) apply(at ast.Positioned, operator string, left, right Value) (Value, error) {
-	value, err := binaryValue(operator, left, right)
-	if err != nil {
-		return nil, r.fail(err, at)
-	}
-	return value, nil
-}
-
-func truthy(val Value) bool {
-	switch v := val.(type) {
-	case bool:
-		return v
-	case int:
-		return v != 0
-	case string:
-		return v != ""
-	default:
-		return val != nil
-	}
-}
-
-func copyLocals(local map[string]Value) map[string]Value {
-	result := make(map[string]Value, len(local))
-	for name, value := range local {
-		result[name] = value
-	}
-	return result
-}
-
-// indexValue applies an index, matching the VM's implementation of the same
-// operation. Both report through the same catalogue entries.
-func indexValue(value, index Value) (Value, error) {
-	switch v := value.(type) {
-	case []Value:
-		idx, ok := index.(int)
-		if !ok {
-			return nil, fault.IndexType(index)
-		}
-		if idx < 0 || idx >= len(v) {
-			return nil, fault.IndexRange(idx, len(v))
-		}
-		return v[idx], nil
-	case map[interface{}]interface{}:
-		result, exists := v[index]
-		if !exists {
-			return nil, fault.MissingKey(index)
-		}
-		return result, nil
-	default:
-		return nil, fault.NotIndexable(value)
-	}
-}
-
-// binaryValue implements supported binary operators and reports incompatible
-// operands through the shared fault catalogue.
-func binaryValue(operator string, left, right Value) (Value, error) {
-	switch operator {
-	case "+":
-		switch value := left.(type) {
-		case int:
-			if other, ok := right.(int); ok {
-				return value + other, nil
-			}
-		case string:
-			if other, ok := right.(string); ok {
-				return value + other, nil
-			}
-		}
-	case "-", ">", "<":
-		a, aOK := left.(int)
-		b, bOK := right.(int)
-		if aOK && bOK {
-			switch operator {
-			case "-":
-				return a - b, nil
-			case ">":
-				return a > b, nil
-			default:
-				return a < b, nil
-			}
-		}
-	case "==":
-		return reflect.DeepEqual(left, right), nil
-	}
-	return nil, fault.OperandType(operator, left, right)
-}
-
-// addFrame adds a call site to a runtime fault while preserving other error
-// types.
-func addFrame(err error, function string, call source.Location) error {
-	if failure, ok := err.(*fault.Error); ok {
-		return failure.WithTrace([]fault.Frame{{Function: function, Call: call}})
-	}
-	return err
+	return copy
 }

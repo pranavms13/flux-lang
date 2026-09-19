@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `GRM-BLOCK`, `GRM-BLOCK-DECLARATION`, `EVL-BLOCK-RESULT`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.3 (resolve local bindings and capture environments)
 - Migration: none; the change is additive
 

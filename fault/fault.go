@@ -82,7 +82,7 @@ func (e *Error) Error() string {
 // does.
 func (e *Error) Diagnostic() diagnostic.Diagnostic {
 	d := diagnostic.Error(e.Code, e.span(), "%s", e.Message)
-	for _, frame := range e.Trace {
+	for _, frame := range e.Trace[:min(len(e.Trace), MaxTraceFrames)] {
 		if frame.Call.IsValid() {
 			d = d.WithNote("in %s, called at %s", frame.Function, frame.Call)
 		}
@@ -165,7 +165,7 @@ func IndexType(index any) *Error {
 }
 
 // IndexRange reports a list index outside the list.
-func IndexRange(index, length int) *Error {
+func IndexRange(index int64, length int) *Error {
 	return newError(CodeIndexRange, "list index %d is out of range, the list has %d %s",
 		index, length, plural(length, "element"))
 }
@@ -184,7 +184,7 @@ func describe(value any) string {
 	switch v := value.(type) {
 	case nil:
 		return "void"
-	case int:
+	case int, int64:
 		return "int"
 	case string:
 		return "string"
@@ -218,3 +218,33 @@ func plural(n int, noun string) string {
 	}
 	return noun + "s"
 }
+
+var (
+	CodeIntOverflow   = diagnostic.Register("R_INT_OVERFLOW", "an integer operation exceeds the signed 64-bit range")
+	CodeZeroDivisor   = diagnostic.Register("R_ZERO_DIVISOR", "division or remainder by zero")
+	CodeIncomparable  = diagnostic.Register("R_INCOMPARABLE", "equality involves a function or a container holding one")
+	CodeConditionType = diagnostic.Register("R_CONDITION_TYPE", "a condition or logical operand is not a bool")
+	CodeInvalidKey    = diagnostic.Register("R_INVALID_DICT_KEY", "a dictionary key is not an int, string, or bool")
+	CodeCallDepth     = diagnostic.Register("R_CALL_DEPTH", "execution exceeds the function call depth limit")
+)
+
+func IntOverflow(op string) *Error { return newError(CodeIntOverflow, "integer overflow in %s", op) }
+func ZeroDivisor(op string) *Error { return newError(CodeZeroDivisor, "zero divisor in %s", op) }
+func Incomparable() *Error {
+	return newError(CodeIncomparable, "function values and containers holding functions cannot be compared")
+}
+func ConditionType(v any) *Error {
+	return newError(CodeConditionType, "condition must be bool, got %s", describe(v))
+}
+func InvalidKey(v any) *Error {
+	return newError(CodeInvalidKey, "dictionary key must be int, string, or bool, got %s", describe(v))
+}
+func UnaryType(op string, v any) *Error {
+	return newError(CodeOperandType, "cannot apply %s to %s", op, describe(v))
+}
+func CallDepth(limit int) *Error {
+	return newError(CodeCallDepth, "function call depth exceeds limit %d", limit)
+}
+
+// MaxTraceFrames caps diagnostic presentation independently of execution depth.
+const MaxTraceFrames = 32

@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `BND-FORWARD-REFERENCE`, `BND-SELF-RECURSION`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.4 (introduce typed self-recursion)
 - Migration: [Recursive functions](../MIGRATION.md#recursive-functions)
 
@@ -25,9 +25,9 @@ feature exists, and the only way to use it is to turn off the checking.
 ## Decision
 
 An ordinary binding must be declared before it is used. A function may refer to
-itself by the name it is being bound to, provided that binding carries a return
-type annotation, which is what lets the checker type the body without solving
-the recursion.
+itself by the name it is being bound to, provided a complete signature is supplied by the variable annotation or all
+parameter and return annotations. The checker binds that signature before
+checking the body, without solving recursive inference.
 
 Mutual recursion between separate declarations stays unavailable; it needs a
 declaration group, and there is no evidence yet that it is wanted.
@@ -37,3 +37,6 @@ declaration group, and there is no evidence yet that it is wanted.
 The checker gains a pre-binding step for a `let` whose value is an annotated
 function literal. The relaxed modes stop being the only way to write a recursive
 program, which is the point.
+
+Implemented in Phase 3 with a default limit of 256 active user calls and a
+32-frame rendered trace cap. Binding errors are never downgraded by type modes.

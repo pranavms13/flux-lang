@@ -3,6 +3,7 @@ package vm_test
 import (
 	"bytes"
 	"encoding/gob"
+	"strings"
 	"sync"
 	"testing"
 
@@ -52,4 +53,16 @@ func TestProgramConcurrentEncodeDecode(t *testing.T) {
 	}
 	close(start)
 	workers.Wait()
+}
+
+// Numeric values and binding operands changed in format 2; a prior payload
+// must be rejected before any of its instructions are interpreted.
+func TestRejectPhase2ProgramFormat(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := gob.NewEncoder(&encoded).Encode(vm.Program{Version: 1, Chunk: &vm.Chunk{Code: []byte{byte(vm.OpReturn)}, Constants: []any{int(42)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.Decode(encoded.Bytes()); err == nil || !strings.Contains(err.Error(), "recompile") {
+		t.Fatalf("format 1: %v", err)
+	}
 }

@@ -59,7 +59,7 @@ print(xs[1] > 2)
 	comparison := program.Statements[3]
 
 	funcExpr := greet.Let.Expr.Func
-	sum := greet.Let.Expr.Func.Body.Bin.Left
+	sum := greet.Let.Expr.Func.Body.Bin.Left.Left.Left.Left
 	greeting := primary(t, call.Expr).Postfix[0].Call
 	indexed := primary(t, primary(t, comparison.Expr).Postfix[0].Call.Args[0])
 
@@ -75,11 +75,11 @@ print(xs[1] > 2)
 		{"parameter annotation", funcExpr.Params[0].TypeAnno, ": string"},
 		{"return annotation", funcExpr.ReturnAnno, ": string"},
 		{"annotated type", funcExpr.ReturnAnno.Type, "string"},
-		{"string term", sum.Left.Base.Term, `"Hello, "`},
+		{"string term", sum.Left.Left.Primary.Base.Term, `"Hello, "`},
 		// An operator's position comes from the node the operator begins, so
 		// the addition covers the operator and its right operand.
 		{"operator and operand", sum.Rest[0], "+ name"},
-		{"identifier term", sum.Rest[0].Right.Base.Term, "name"},
+		{"identifier term", sum.Rest[0].Right.Left.Primary.Base.Term, "name"},
 		{"annotated declaration", xs.Let, "let xs: [int] = [1, 2, 3]"},
 		{"list type annotation", xs.Let.TypeAnno, ": [int]"},
 		{"list literal", primary(t, xs.Let.Expr).Base.List, "[1, 2, 3]"},
@@ -87,7 +87,7 @@ print(xs[1] > 2)
 		{"call arguments", greeting, `(greet("Flux"))`},
 		{"nested call argument", greeting.Args[0], `greet("Flux")`},
 		{"index", indexed.Postfix[0].Index, "[1]"},
-		{"comparison", primary(t, comparison.Expr).Postfix[0].Call.Args[0].Bin.Rest[0], "> 2"},
+		{"comparison", primary(t, comparison.Expr).Postfix[0].Call.Args[0].Bin.Left.Left.Left.Rest, "> 2"},
 	} {
 		t.Run(test.what, func(t *testing.T) {
 			if got := spanText(t, result, test.node); got != test.want {
@@ -415,7 +415,7 @@ func primary(t *testing.T, expr *ast.Expr) *ast.PrimaryExpr {
 	if expr == nil || expr.Bin == nil || expr.Bin.Left == nil {
 		t.Fatalf("expression %+v is not a binary expression", expr)
 	}
-	return expr.Bin.Left.Left
+	return expr.Bin.Left.Left.Left.Left.Left.Left.Primary
 }
 
 // onlyDiagnostic requires exactly one parse failure and returns it for

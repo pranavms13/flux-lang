@@ -136,3 +136,21 @@ func TestLexer(t *testing.T) {
 		})
 	}
 }
+
+func TestPhase3LongestMatch(t *testing.T) {
+	lex, err := fluxlexer.LexerRules.Lex("operators.flux", strings.NewReader("1-2<=3>=4!=5==6&&true||false;!true=>->"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1", "-", "2", "<=", "3", ">=", "4", "!=", "5", "==", "6", "&&", "true", "||", "false", ";", "!", "true", "=>", "->"}
+	for _, value := range want {
+		tok, err := lex.Next()
+		if err != nil || tok.Value != value {
+			t.Fatalf("token=%v err=%v, want %q", tok, err, value)
+		}
+	}
+	tok, err := lex.Next()
+	if err != nil || !tok.EOF() {
+		t.Fatalf("expected EOF, got %v %v", tok, err)
+	}
+}

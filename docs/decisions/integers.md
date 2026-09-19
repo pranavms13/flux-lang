@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `VAL-INT`, `VAL-INT-OVERFLOW`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.1 (add precedence levels and checked value operations)
 - Migration: [Integer overflow](../MIGRATION.md#integer-overflow)
 

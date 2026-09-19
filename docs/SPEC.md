@@ -1,7 +1,7 @@
 # The Flux language specification
 
 Status: normative for the implementation in this repository. Last revised
-2026-09-18, alongside Phase 2 of [the development plan](PLAN.md).
+2026-09-19, alongside Phase 3 of [the development plan](PLAN.md).
 
 This document says what a Flux program means. It is written to be checked
 rather than believed: every normative rule below carries an identifier, and
@@ -30,8 +30,7 @@ deliberately *not* a rule. Those entries are numbered `UNS-…`, have no fixture
 and exist so that host behavior visible through Flux is never mistaken for a
 guarantee.
 
-Terminology: an **expression** produces a value. A **statement** is a top-level
-declaration or expression. **void** is the type of an expression that produces
+Terminology: an **expression** produces a value. A **statement** is a declaration or expression, at top level or inside a block. **void** is the type of an expression that produces
 no value; `print` returns it. A **mode** is one of the four type-checking
 configurations in [section 9](#9-type-checking-modes).
 
@@ -59,7 +58,10 @@ comments separate tokens and carry no other meaning.
   There is no sign, no base prefix and no digit separator: `-1` is not a
   literal (see `VAL-NEG`), and `1_000` is two tokens.
 - `LEX-INT-RANGE` (implemented) — An integer literal that does not fit a signed
-  64-bit integer is rejected while the file is read.
+  64-bit integer is rejected as `S_INT_RANGE` while the file is read. The
+  magnitude `9223372036854775808` is permitted only immediately beneath unary
+  minus (with optional trivia), producing `-9223372036854775808`. Parentheses
+  around the positive magnitude do not make it valid.
 - `LEX-STRING` (implemented) — A string literal is delimited by `"`. It may
   span lines. `\` begins an escape sequence; the accepted set is
   [unspecified](#10-intentionally-unspecified) beyond `\\`, `\"`, `\n` and `\t`.
@@ -71,9 +73,9 @@ comments separate tokens and carry no other meaning.
 - `GRM-PROGRAM` (implemented) — A program is zero or more statements, evaluated
   in order. An empty program is valid and produces no output.
 - `GRM-STATEMENT` (implemented) — A statement is either a `let` declaration or
-  an expression. Statements are not separated by punctuation; the grammar is
-  unambiguous without it.
-- `GRM-STATEMENT-SEPARATOR` (phase 3) — An optional `;` may separate adjacent
+  an expression. A statement may end with an optional semicolon. Empty
+  statements and repeated semicolons are not admitted.
+- `GRM-STATEMENT-SEPARATOR` (implemented) — An optional `;` may separate adjacent
   statements, for the cases where juxtaposition reads as one expression.
 - `GRM-ADJACENCY` (implemented) — Because a newline is whitespace, a `(`
   beginning the next line continues the expression before it: `f` followed by
@@ -87,16 +89,25 @@ Operators, loosest first:
 
 | Level | Operators | Associativity |
 | --- | --- | --- |
-| 1 | `==`, `<`, `>` | left |
-| 2 | `+`, `-` | left |
-| 3 | postfix `(…)` call, `[…]` index | left |
+| 1 | `\|\|` | left, short circuit |
+| 2 | `&&` | left, short circuit |
+| 3 | `==`, `!=` | left |
+| 4 | `<`, `<=`, `>`, `>=` | non-associative |
+| 5 | `+`, `-` | left |
+| 6 | `*`, `/`, `%` | left |
+| 7 | unary `-`, `!` | right |
+| 8 | postfix `(…)` call, `[…]` index | left |
 
-- `GRM-PRECEDENCE` (implemented) — Comparison binds more loosely than addition
-  and subtraction, so `a - b < c` is `(a - b) < c`.
-- `GRM-ASSOCIATIVITY` (implemented) — Both levels associate to the left:
-  `3 - 2 - 1` is `(3 - 2) - 1`, which is `0`.
+- `GRM-PRECEDENCE` (implemented) — Operators bind according to the table, so
+  `1 + 2 * 3` is `7`, and `a - b < c` is `(a - b) < c`.
+- `GRM-ASSOCIATIVITY` (implemented) — Arithmetic and equality chains associate
+  left: `3 - 2 - 1` is `(3 - 2) - 1`. Relational chaining such as `1 < 2 < 3`
+  is a syntax error; explicit parentheses are required, and the resulting
+  operands must still have valid types. Unary operators associate right.
 - `GRM-GROUP` (implemented) — `( … )` groups an expression and overrides
-  precedence. It produces the value of the expression inside it.
+  precedence. It produces the value of the expression inside it. Parenthesized
+  functions and conditionals may appear wherever a primary value is accepted,
+  including as a callee or an indexed value.
 - `GRM-POSTFIX` (implemented) — Calls and indexes apply left to right to the
   expression before them, so `f(x)[0](y)` calls `f`, indexes the result, and
   calls that.
@@ -122,9 +133,9 @@ Operators, loosest first:
   block. A block that yields void is written `{ print("") }` or any block whose
   last expression is void.
 - `GRM-BLOCK` (implemented) — `{ e1 e2 e3 }` is a block: a sequence of
-  expressions in braces. It is distinguished from a dictionary literal by its
-  contents, and only the last expression's value survives.
-- `GRM-BLOCK-DECLARATION` (phase 3) — A block may contain `let` declarations.
+  statements in braces. It is distinguished from a dictionary literal by its
+  contents, and only the last item's value survives.
+- `GRM-BLOCK-DECLARATION` (implemented) — A block may contain `let` declarations.
   A declaration is scoped to the block, and a block whose last item is a
   declaration produces void.
 
@@ -144,8 +155,9 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
 - `TYP-ANNOTATION-RETURN` (implemented) — An annotated return type must match
   the type of the body.
 - `TYP-INFERRED` (implemented) — An unannotated `let` takes the type of its
-  value. An unannotated parameter has no known type; the checker neither
-  constrains it nor reports against it.
+  value. An unannotated parameter has no known type unless a variable function
+  annotation supplies it; otherwise the checker does not infer constraints
+  from its uses yet.
 - `TYP-NO-COERCION` (implemented) — There is no implicit conversion between
   types. `1 + "1"` is an error in both directions, and no operator converts its
   operands.
@@ -158,8 +170,9 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
 ### 5.1 Scalars
 
 - `VAL-INT` (implemented) — `int` is a signed 64-bit integer.
-- `VAL-INT-OVERFLOW` (phase 3) — An operation whose result does not fit an
-  `int` is an error. Today the result wraps silently.
+- `VAL-INT-OVERFLOW` (implemented) — An operation whose result does not fit an
+  `int` is `R_INT_OVERFLOW` at the operation. Addition, subtraction,
+  multiplication, division and negation are checked; results never wrap.
 - `VAL-STRING` (implemented) — `string` is an immutable sequence of bytes,
   written as a literal. Strings are not indexable.
 - `VAL-BOOL` (implemented) — `bool` is `true` or `false`.
@@ -174,31 +187,39 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
   is the only overload of `+`; mixing an `int` and a `string` is an error.
 - `VAL-SUB` (implemented) — `-` subtracts two `int`s. It has no other operand
   types.
-- `VAL-ORDER` (implemented) — `<` and `>` compare two `int`s and produce a
+- `VAL-MULTIPLY` (implemented) — `*` multiplies two `int`s with overflow checks.
+- `VAL-ORDER` (implemented) — `<`, `<=`, `>` and `>=` compare two `int`s and produce a
   `bool`. They have no other operand types.
-- `VAL-EQUALITY` (implemented) — `==` compares two values and produces a
+- `VAL-EQUALITY` (implemented) — `==` compares two values and `!=` negates that result, producing a
   `bool`. Scalars compare by value; lists and dictionaries compare element by
   element. Values of different types are never equal.
-- `VAL-EQUALITY-FUNCTION` (phase 3) — Comparing functions, or containers that
-  hold functions, is an error rather than a structural comparison.
-- `VAL-DIVIDE` (phase 3) — `/` divides two `int`s, truncating the quotient
+- `VAL-EQUALITY-FUNCTION` (implemented) — Comparing functions, or containers that
+  hold functions, reports `T_INCOMPARABLE` when checking is enabled and
+  `R_INCOMPARABLE` if executed. Both complete values are checked for
+  comparability before a length or element mismatch can decide equality.
+- `VAL-DIVIDE` (implemented) — `/` divides two `int`s, truncating the quotient
   toward zero, and `%` takes the remainder, which has the sign of the dividend.
-  A zero divisor is an error.
-- `VAL-NEG` (phase 3) — Unary `-` negates an `int`.
-- `VAL-LOGICAL` (phase 3) — `!` takes a `bool` and produces a `bool`; `&&` and
+  A zero divisor reports `R_ZERO_DIVISOR`. `MinInt64 / -1` overflows, while
+  `MinInt64 % -1` is zero.
+- `VAL-NEG` (implemented) — Unary `-` negates an `int`.
+- `VAL-LOGICAL` (implemented) — `!` takes a `bool` and produces a `bool`; `&&` and
   `||` take two `bool`s, produce a `bool`, and do not evaluate their right
-  operand when the left one decides the result.
+  operand when the left one decides the result. Both operands are still
+  checked statically. An evaluated non-boolean logical operand reports
+  `R_CONDITION_TYPE`; unary `!` uses `R_OPERAND_TYPE`.
 
 ### 5.3 Collections
 
 - `VAL-LIST-HOMOGENEOUS` (implemented) — Every element of a list has the same
   type. `[]` has an as-yet-unknown element type.
 - `VAL-LIST-INDEX` (implemented) — A list is indexed by an `int`. An index
-  below zero or at or above the length is an error.
+  below zero or at or above the length is an error. The int64 range is checked
+  before conversion to a host index.
 - `VAL-DICT-HOMOGENEOUS` (implemented) — Every key of a dictionary has the same
   type, and every value has the same type.
 - `VAL-DICT-KEY-TYPE` (implemented) — A dictionary key is an `int`, a `string`
-  or a `bool`. Lists, dictionaries and functions are not keys.
+  or a `bool`. Lists, dictionaries, functions and void are not keys. Runtime
+  validation also enforces this when checking is disabled.
 - `VAL-DICT-DUPLICATE` (implemented) — When a literal writes the same key
   twice, the last pair wins. Both values are still evaluated.
 - `VAL-DICT-MISSING` (implemented) — Reading a key a dictionary does not hold
@@ -212,6 +233,11 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
   as the function declares.
 - `VAL-FN-NOT-CALLABLE` (implemented) — Calling a value that is not a function
   is an error.
+- `VAL-FN-DEPTH` (implemented) — At most 256 user function calls may be active
+  by default. The next call fails with `R_CALL_DEPTH` at its call site. Host
+  API callers may set `runtime.Options.MaxDepth` or `vm.VM.MaxDepth`; nonpositive
+  values use the default. Diagnostics render at most 32 innermost trace frames,
+  independently of the execution limit. Builtin calls do not consume depth.
 
 ## 6. Evaluation
 
@@ -234,8 +260,9 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
   whose value is not void displays that value the way `print` would. A `let`
   declaration displays nothing.
 - `EVL-BLOCK-RESULT` (implemented) — A block produces the value of its last
-  expression. Earlier expressions are evaluated for their effects, and their
-  values are discarded.
+  item. Earlier items are evaluated for their effects, and their
+  values are discarded. A final declaration yields void, even with a trailing
+  semicolon; a semicolon does not discard a final expression value.
 - `EVL-DIAGNOSTIC-STREAM` (implemented) [TestCLI] — A program's output goes to standard
   output and every diagnostic goes to standard error, so one can be read
   without the other.
@@ -248,30 +275,32 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
 - `EVL-DISPLAY-SCALAR` (implemented) — An `int` displays as its decimal digits.
   A `string` displays as its characters, without quotes or escapes. A `bool`
   displays as `true` or `false`, never as `yes` or `no`.
-- `EVL-DISPLAY-CONTAINER` (phase 3) — A list displays as `[a, b, c]` and a
+- `EVL-DISPLAY-CONTAINER` (implemented) — A list displays as `[a, b, c]` and a
   dictionary as `{k: v}`, with nested strings quoted so that a displayed value
-  can be told apart from a displayed name. Today both use a host-defined form;
-  see `UNS-DISPLAY-CONTAINER`.
-- `EVL-DISPLAY-OPAQUE` (phase 3) — A function or a void value displays as a
-  fixed placeholder that contains no host address and is identical on both
-  engines. Today neither is true; see `UNS-DISPLAY-OPAQUE`.
+  can be told apart from a displayed name. Dictionary entries are sorted
+  lexicographically by their rendered key/value entries for deterministic output.
+- `EVL-DISPLAY-OPAQUE` (implemented) — A function or a void value displays as a
+  fixed placeholder: `<function>` for user functions and builtins, `<void>`
+  for void. Neither contains a host address, and both engines agree.
 
 ### 6.4 Conditions
 
-- `EVL-IF-TRUTHY` (implemented) — Outside strict mode a condition that is not a
-  `bool` is accepted with a warning and treated as truthy: `0`, `""` and void
-  are false, and every other value is true.
-- `EVL-IF-BOOL` (phase 3) — A condition must be a `bool` in every mode.
-  Truthiness is removed.
+- `EVL-IF-TRUTHY` (implemented) — Former truthy conditions (`0`, `""`, collections
+  and other non-booleans) are rejected. This identifier is retained to track
+  the migration from Phase 2.
+- `EVL-IF-BOOL` (implemented) — A condition must be a `bool` in every mode.
+  Checking reports `T_CONDITION_TYPE`; runtime validation reports
+  `R_CONDITION_TYPE` in warn-only or disabled mode.
 
 ## 7. Bindings, scope and lifetime
 
 - `BND-LET` (implemented) — `let name = value` evaluates `value` and binds it
   to `name`. The binding is immutable: nothing assigns to a name after it is
-  bound.
+  bound. An initializer cannot read its own binding (`B_SELF_INITIALIZATION`),
+  except inside a directly bound function literal, including parentheses.
 - `BND-TOP-LEVEL-SCOPE` (implemented) — A top-level binding is visible to every
-  statement, and inside every function, from the point the declaration is
-  evaluated onward.
+  later statement and function body in lexical source order. The builtin
+  scope is outside the user top level, so `let print = ...` may shadow it.
 - `BND-PARAMETER-SCOPE` (implemented) — A parameter is visible only inside its
   function's body, and shadows a top-level binding of the same name.
 - `BND-DUPLICATE-PARAMETER` (implemented) — A function that declares the same
@@ -281,18 +310,25 @@ composite forms: `[T]`, `{K: V}` and `fn(T, …) -> R`.
   that function's parameters.
 - `BND-BUILTIN-PRINT` (implemented) — `print` is predeclared with type
   `fn(T) -> void`. It is an ordinary binding: a program may shadow it.
-- `BND-REDECLARE` (phase 3) — Declaring a name twice in one scope is rejected.
-  Today the second declaration silently replaces the first.
-- `BND-FORWARD-REFERENCE` (phase 3) — A name must be declared before it is
-  used. Today the checker rejects a forward reference, but a program that
-  reaches execution with checking relaxed resolves it against whatever the name
-  holds by then.
-- `BND-CAPTURE-IDENTITY` (phase 3) — A captured name keeps the binding it
-  resolved to when the function was written, so redeclaring that name later
-  cannot change what an existing function sees.
-- `BND-SELF-RECURSION` (phase 3) — A function may call itself by the name it is
-  being bound to, provided the binding carries a return-type annotation. Today
-  the checker reports the name as undefined.
+- `BND-REDECLARE` (implemented) — Declaring a name twice in one scope is rejected.
+  The error is `B_DUPLICATE_DECLARATION`, with the first declaration attached.
+  An inner block may shadow an outer binding. Parameters have a function scope;
+  a block body introduces a further scope.
+- `BND-FORWARD-REFERENCE` (implemented) — A name must be declared before it is
+  used. Undefined names report `B_UNDEFINED_VARIABLE` before optional type
+  checking in every mode. Duplicate and self-initialization binding errors
+  also remain errors in warn-only and disabled modes.
+- `BND-CAPTURE-IDENTITY` (implemented) — A captured name keeps the binding it
+  resolved to when the function was written. Later inner shadowing cannot
+  change it, and captured cells survive every enclosing function return.
+- `BND-SELF-RECURSION` (implemented) — A function may call itself by the name it is
+  being bound to, at global or block scope. Checking requires a complete
+  signature from a variable annotation (`fn(T) -> R`) or all parameter and
+  return annotations; missing parts report `T_RECURSIVE_SIGNATURE`. The
+  signature is bound before the body is checked, and the body is checked
+  against it. Warn-only downgrades that type error and disabled skips it,
+  while name resolution and depth checks remain active. Mutual recursion
+  and general forward declaration hoisting are not supported.
 
 ## 8. Diagnostics
 
@@ -317,14 +353,14 @@ for the file format.
 | warn-only | true | — | true |
 | disabled | false | — | — |
 
-- `MOD-DISABLED` (implemented) — Checking is skipped entirely. The program runs
-  and reports whatever it encounters at run time.
-- `MOD-LENIENT` (implemented) — Mismatches are errors, except for the three
+- `MOD-DISABLED` (implemented) — Type checking is skipped. Parsing and lexical resolution
+  still run; a validly bound program reports runtime validation failures normally.
+- `MOD-LENIENT` (implemented) — Mismatches are errors, except for the two
   rules listed under `MOD-STRICT`, which are warnings.
-- `MOD-STRICT` (implemented) — A non-`bool` condition (`EVL-IF-TRUTHY`),
-  conditional branches of differing types, and `==` between different types are
+- `MOD-STRICT` (implemented) — Conditional branches of differing types, and
+  equality between different types are
   errors instead of warnings. No other rule changes.
-- `MOD-WARN-ONLY` (implemented) — Every diagnostic the checker would report as
+- `MOD-WARN-ONLY` (implemented) — Every type diagnostic the checker would report as
   an error is reported as a warning instead, and the program runs anyway. It
   usually then fails at run time, because the mismatch was real.
 - `MOD-SEVERITY-ONLY` (implemented) — A mode changes only severity. The code,
@@ -344,19 +380,6 @@ Each names the rule that will replace it.
   a string literal accepts are those of the host's string unquoting, including
   `\xNN`, `\uNNNN` and octal forms. Which escapes exist, and what an
   unrecognized one does, is not yet decided.
-- `UNS-DISPLAY-CONTAINER` — A displayed list or dictionary currently uses the
-  host's default formatting (`[1 2 3]`, `map[a:1]`). `EVL-DISPLAY-CONTAINER`
-  replaces it.
-- `UNS-DISPLAY-OPAQUE` — A displayed function currently reveals a host address,
-  and the two engines disagree on the text. A displayed void value currently
-  appears as a host placeholder. `EVL-DISPLAY-OPAQUE` replaces both.
-- `UNS-EQUALITY-FUNCTION` — `==` on functions currently compares host
-  structures, so a function equals itself and differs from an identical
-  literal. `VAL-EQUALITY-FUNCTION` replaces it.
-- `UNS-INT-WIDTH` — `int` is specified as 64-bit (`VAL-INT`), but the
-  implementation currently uses the host's `int`, so the width follows the
-  build target. `VAL-INT-OVERFLOW` fixes both the width and the overflow
-  behavior.
 - `UNS-DIAGNOSTIC-TEXT` — The wording of a diagnostic message, the set of
   attached notes, and the phrasing of the grammar's "expected …" list are not
   stable. Assert on codes and spans instead.
@@ -366,5 +389,3 @@ Each names the rule that will replace it.
   one fixtures assert.
 - `UNS-BYTECODE` — The compiled bytecode format has no compatibility promise.
   Rebuild after a compiler change; already-built executables are unaffected.
-- `UNS-EVALUATION-DEPTH` — There is no specified recursion limit. A deeply
-  recursive program may exhaust the host stack.

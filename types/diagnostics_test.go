@@ -210,7 +210,7 @@ func TestModesChangeSeverityAndNothingElse(t *testing.T) {
 		lenient diagnostic.Severity
 	}{
 		{"always an error", `let x: int = "hello"`, diagnostic.SeverityError, diagnostic.SeverityError},
-		{"tolerated condition", `print(if 1 then { 2 } else { 3 })`, diagnostic.SeverityError, diagnostic.SeverityWarning},
+		{"boolean condition", `print(if 1 then { 2 } else { 3 })`, diagnostic.SeverityError, diagnostic.SeverityError},
 		{"tolerated comparison", `print(1 == "wrong")`, diagnostic.SeverityError, diagnostic.SeverityWarning},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -253,7 +253,7 @@ func TestModesChangeSeverityAndNothingElse(t *testing.T) {
 // TestDisabledCheckerReportsNothing verifies that disabled checking produces
 // neither diagnostics nor severity flags.
 func TestDisabledCheckerReportsNothing(t *testing.T) {
-	checker, _ := check(t, `let x: int = "hello" print(missing)`, types.TypeCheckingMode{})
+	checker, _ := check(t, `let x: int = "hello" print(x)`, types.TypeCheckingMode{})
 
 	if len(checker.Diagnostics()) != 0 || checker.HasErrors() || checker.HasWarnings() {
 		t.Errorf("a disabled checker reported %v", checker.Diagnostics())
@@ -263,13 +263,13 @@ func TestDisabledCheckerReportsNothing(t *testing.T) {
 // TestDiagnosticsAreOrderedBySourcePosition checks that checker output follows
 // the offending constructs in source order.
 func TestDiagnosticsAreOrderedBySourcePosition(t *testing.T) {
-	checker, src := check(t, "let a: int = \"first\"\nlet b: string = 2\nprint(missing)\n", strict())
+	checker, src := check(t, "let a: int = \"first\"\nlet b: string = 2\nlet c: bool = 3\n", strict())
 
 	all := checker.Diagnostics()
 	if len(all) != 3 {
 		t.Fatalf("got %d diagnostics, want 3: %v", len(all), checker.GetErrors())
 	}
-	for i, want := range []string{`"first"`, "2", "missing"} {
+	for i, want := range []string{`"first"`, "2", "3"} {
 		if got := src.TextOf(all[i].Primary); got != want {
 			t.Errorf("diagnostic %d points at %q, want %q", i, got, want)
 		}
@@ -303,15 +303,15 @@ func TestStringAccessorsCarryPositionsWhenKnown(t *testing.T) {
 }
 
 // TestLenientNotesExplainTheTolerance verifies that a warning explains the
-// runtime interpretation of a tolerated condition.
+// runtime interpretation of a tolerated comparison.
 func TestLenientNotesExplainTheTolerance(t *testing.T) {
-	checker, _ := check(t, `print(if 1 then { 2 } else { 3 })`, types.TypeCheckingMode{Enabled: true})
+	checker, _ := check(t, `print(1 == "wrong")`, types.TypeCheckingMode{Enabled: true})
 	d := only(t, checker)
 
 	if len(d.Notes) == 0 {
 		t.Fatal("a tolerated mistake does not say what the checker did instead")
 	}
-	if !strings.Contains(strings.Join(checker.GetWarnings(), "\n"), "treating as truthy") {
+	if !strings.Contains(strings.Join(checker.GetWarnings(), "\n"), "allowing comparison") {
 		t.Errorf("warnings = %v, want the note rendered", checker.GetWarnings())
 	}
 }

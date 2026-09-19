@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `VAL-NEG`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.1 (add precedence levels and checked value operations)
 - Migration: none; the operator is new
 

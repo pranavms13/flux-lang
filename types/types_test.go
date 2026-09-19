@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pranavms13/flux-lang/ast"
 	"github.com/pranavms13/flux-lang/parser"
+	"github.com/pranavms13/flux-lang/source"
 	"github.com/pranavms13/flux-lang/types"
 )
 
@@ -23,7 +25,7 @@ func TestTypeCheckingModes(t *testing.T) {
 		{"subtraction", `print("wrong" - 1)`, "invalid operands", false},
 		{"comparison", `print("wrong" > 1)`, "invalid operands", false},
 		{"known invalid operand", `let f = fn(x) => true + x`, "invalid operands", false},
-		{"condition", `print(if 1 then { 2 } else { 3 })`, "if condition must be bool", true},
+		{"condition", `print(if 1 then { 2 } else { 3 })`, "if condition must be bool", false},
 		{"branches", `let x = if true then { 2 } else { "wrong" }`, "if branches must have same type", true},
 		{"equality", `print(1 == "wrong")`, "cannot compare different types", true},
 		{"list", `let x = [1, "wrong"]`, "list element", false},
@@ -53,6 +55,13 @@ func TestTypeCheckingModes(t *testing.T) {
 				t.Run(mode.name, func(t *testing.T) {
 					tc := types.NewTypeCheckerWithConfig(mode.config)
 					tc.CheckProgram(prog)
+					bindingError := tt.name == "duplicate parameters" || tt.name == "undefined"
+					if bindingError {
+						if !tc.HasErrors() || !strings.Contains(strings.Join(tc.GetErrors(), "\n"), tt.diagnostic) {
+							t.Fatalf("binding error missing: %v", tc.Diagnostics())
+						}
+						return
+					}
 					if !mode.config.Enabled {
 						if tc.HasErrors() || tc.HasWarnings() {
 							t.Fatal("disabled checker emitted diagnostics")
@@ -114,5 +123,48 @@ func TestInferenceAndTypeConversions(t *testing.T) {
 	b := types.FunctionType{ParamTypes: []types.FluxType{types.IntType{}, types.UnknownType{}}, ReturnType: types.VoidType{}}
 	if !types.TypesEqual(a, b) || !types.TypesEqual(b, a) {
 		t.Fatal("nested unknown types should be compatible symmetrically")
+	}
+}
+
+// TestCheckProgramIsolatesPrograms pins a reused checker against the previous
+// program's state. Resolver IDs restart at PrintID for every program, so a
+// binding type held over from an earlier program would describe a binding it
+// never saw, and the compiler and runtime already reset for the same reason.
+func TestCheckProgramIsolatesPrograms(t *testing.T) {
+	parse := func(name, text string) *ast.Program {
+		t.Helper()
+		result := parser.ParseSource(source.New(1, name, text))
+		if result.Failed() {
+			t.Fatalf("parse %s: %v", name, result.Diagnostics)
+		}
+		return result.Program
+	}
+
+	mode := types.TypeCheckingMode{Enabled: true, Strict: true}
+	faulty := parse("faulty.flux", "let bad: int = \"text\"\n")
+	clean := parse("clean.flux", "let n: int = 1\nprint(n)\n")
+
+	// A checker that saw a bad program must not carry its diagnostics into a
+	// good one.
+	reused := types.NewTypeCheckerWithConfig(mode)
+	reused.CheckProgram(faulty)
+	if !reused.HasErrors() {
+		t.Fatal("the annotated mismatch should be an error in strict mode")
+	}
+	reused.CheckProgram(clean)
+	if got := reused.Diagnostics(); len(got) != 0 {
+		t.Errorf("reused checker reported %d diagnostics for a clean program: %v", len(got), got)
+	}
+
+	// And the reverse: a good program first must not mask a bad one after it.
+	fresh := types.NewTypeCheckerWithConfig(mode)
+	fresh.CheckProgram(faulty)
+	want := len(fresh.Diagnostics())
+
+	reversed := types.NewTypeCheckerWithConfig(mode)
+	reversed.CheckProgram(clean)
+	reversed.CheckProgram(faulty)
+	if got := len(reversed.Diagnostics()); got != want {
+		t.Errorf("reused checker reported %d diagnostics, a fresh one reported %d", got, want)
 	}
 }

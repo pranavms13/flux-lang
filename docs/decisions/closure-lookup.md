@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `BND-CAPTURE`, `BND-CAPTURE-IDENTITY`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.3 (resolve local bindings and capture environments)
 - Migration: [Late name rebinding](../MIGRATION.md#late-name-rebinding)
 

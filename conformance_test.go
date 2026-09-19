@@ -462,6 +462,7 @@ func TestUnspecifiedEntriesAreNotRules(t *testing.T) {
 // unreachableCodes are diagnostic codes no Flux source can provoke, with the
 // reason. They are exempt from fixture coverage; everything else is not.
 var unreachableCodes = map[diagnostic.Code]string{
+	"R_UNDEFINED_VALUE": "name resolution rejects undefined names before either engine can evaluate them",
 	"T_INVALID_ANNOTATION": "the grammar admits only well-formed types, so conversion " +
 		"cannot fail on anything the parser accepts",
 	"X_INTERNAL": "a defect in Flux itself, which a program must not be able to reach",
@@ -575,8 +576,12 @@ func TestConformanceStandaloneExecutables(t *testing.T) {
 			if goruntime.GOOS == "windows" {
 				executable += ".exe"
 			}
+			if err := os.Remove(filepath.Join(dir, name+".flux")); err != nil {
+				t.Fatal(err)
+			}
 			var stdout, stderr bytes.Buffer
 			run := exec.Command(executable)
+			run.Dir = t.TempDir()
 			run.Stdout, run.Stderr = &stdout, &stderr
 			err := run.Run()
 
@@ -617,6 +622,11 @@ func representative(suite []conformance.Fixture) []conformance.Fixture {
 		"VAL-FN-ARITY":          true,
 		"VAL-VOID":              true,
 		"BND-CAPTURE":           true,
+		"BND-SELF-RECURSION":    true,
+		"VAL-FN-DEPTH":          true,
+		"VAL-LOGICAL":           true,
+		"VAL-INT-OVERFLOW":      true,
+		"EVL-DISPLAY-OPAQUE":    true,
 	}
 	var selected []conformance.Fixture
 	for _, fixture := range suite {

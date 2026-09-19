@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Rules: `VAL-EQUALITY`, `VAL-EQUALITY-FUNCTION`
-- Phase: 3
+- Phase: implemented
 - Slice: P3.1 (add precedence levels and checked value operations)
 - Migration: [Comparing functions](../MIGRATION.md#comparing-functions)
 

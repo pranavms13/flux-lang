@@ -40,13 +40,13 @@ var (
 // adding an import the bundle does not contain fails TestBuildBundleIsClosed
 // here rather than a user's build on their machine. Every package in it must
 // depend only on the standard library and on other members of the bundle.
-var bundledPackages = []string{"diagnostic", "fault", "render", "source", "vm"}
+var bundledPackages = []string{"diagnostic", "fault", "render", "source", "value", "vm"}
 
 // Embedding those packages makes compilation independent of the Flux source
 // checkout. Test files are excluded when the bundle is written out; the embed
 // patterns cannot express that.
 //
-//go:embed diagnostic/*.go fault/*.go render/*.go source/*.go vm/*.go
+//go:embed diagnostic/*.go fault/*.go render/*.go source/*.go value/*.go vm/*.go
 var bundleFS embed.FS
 
 const executableTemplate = `package main
